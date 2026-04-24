@@ -1,0 +1,32 @@
+#공통 환경 설정
+
+# --- Core Frameworks & AI ---
+numpy
+scipy
+pandas
+scikit-learn
+joblib
+torch
+torchaudio
+transformers
+accelerate
+bitsandbytes
+sentencepiece
+
+# --- Audio Processing & TinyML ---
+librosa
+pyaudio
+edge-impulse-linux
+
+# --- STT (Speech-to-Text) ---
+faster-whisper
+vosk
+
+# --- TTS (Text-to-Speech) ---
+piper-tts
+
+# --- API & Communication ---
+fastapi
+uvicorn
+requests
+python-multipart

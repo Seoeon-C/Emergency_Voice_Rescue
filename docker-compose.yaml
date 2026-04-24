@@ -1,0 +1,19 @@
+version: '3.8'
+services:
+  rescue-ai:
+    build: .
+    container_name: rescue_system_container
+    volumes:
+      - .:/app
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    stdin_open: true # 대화형 인터페이스 유지
+    tty: true
+    command: tail -f /dev/null #컨테이너 연결 상태 유지
+    environment:
+      - PYTHONUNBUFFERED=1
