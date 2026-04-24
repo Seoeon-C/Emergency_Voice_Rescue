@@ -4,7 +4,7 @@
 1. 🏗️ 프로젝트 폴더 구조 설명
 우리 프로젝트의 뼈대는 다음과 같이 구성되어 있습니다. 각 폴더의 역할을 확인하고 정해진 위치에 코드를 작성해 주세요.
 
-Plaintext
+```text
 EMERGENCY_VOICE_RESCUE
 ├── src/                # 모든 소스 코드가 들어가는 곳
 │   ├── audio/          # 실시간 음성 탐지 (TinyML) 로직
@@ -12,13 +12,15 @@ EMERGENCY_VOICE_RESCUE
 │   ├── nlp/            # Gemma-3 (LLM) 및 의료 Q&A 처리
 │   ├── voice/          # TTS 안내 방송 관련
 │   └── main.py         # 전체 시스템을 실행하는 통합 컨트롤러
-├── data/               # 데이터셋 (Git 제외 대상, 로컬에서 생성 필요)
+├── data/               # 데이터셋 (Git 제외 대상)
 │   ├── train_set/      # 학습용 원본 오디오
 │   └── preprocessed/   # 전처리된 .npy 파일들
-├── models/             # 학습된 모델 가중치 파일 (.pkl, .tflite 등)
+├── models/             # 학습된 모델 가중치 파일
 ├── Dockerfile          # AI 환경 설정 설계도
-├── docker-compose.yaml # 멀티 컨테이너(API, Dashboard 등) 실행 설정
+├── docker-compose.yaml # 멀티 컨테이너 실행 설정
 └── requirements.txt    # 필요한 파이썬 라이브러리 목록
+```
+
 2. 🚀 도커 실행 방법
 노트북에 Docker Desktop이 설치되어 있어야 하며, NVIDIA GPU를 사용한다면 최신 드라이버가 깔려 있어야 합니다.
 
