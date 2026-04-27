@@ -1,0 +1,57 @@
+LLM 응급처치 응답 컴포넌트 산출물 정리
+
+작업 내용
+
+1. 초거대 헬스케어 QA 데이터셋 수령 및 CSV 변환
+   - 원본: AI Hub 헬스케어 특화 질의응답 데이터 (JSON 형식)
+   - 응급/산악 관련 카테고리 필터링 후 question/answer 컬럼으로 변환
+   - 전처리: 특수문자 제거, 결측치 제거, 중복 제거, 공백 정리
+
+2. Llama 3.2-1B QLoRA 샘플 파인튜닝 실험
+   - 데이터 5,000행 샘플로 1 epoch 학습
+   - 환경: Google Colab T4
+   - 결과: 응답 품질 미달 (반복 생성, 엉뚱한 검색 결과, 시스템 태그 노출)
+
+산출물 파일
+
+  스크립트
+    build_emergency_train.py         헬스케어 데이터 CSV 변환 스크립트 (학습용)
+    build_emergency_val.py           헬스케어 데이터 CSV 변환 스크립트 (검증용)
+    cleaned_data.py                  CSV 전처리 스크립트
+    merge_datasets.py                FirstAid + 헬스케어 데이터 병합 스크립트
+
+  원본 변환 CSV (전처리 전)
+    dataset/healthcare_qa_train.csv          헬스케어 QA 원본 변환본 (학습)
+    dataset/healthcare_qa_val.csv            헬스케어 QA 원본 변환본 (검증)
+    dataset/emergency_train.csv              응급 카테고리 필터링 원본 (학습)
+    dataset/emergency_val.csv               응급 카테고리 필터링 원본 (검증)
+
+  전처리 완료 CSV
+    dataset/cleaned_healthcare_qa_train.csv  헬스케어 QA 전처리본 (학습)
+    dataset/cleaned_healthcare_qa_val.csv    헬스케어 QA 전처리본 (검증)
+    dataset/cleaned_emergency_train.csv      응급 카테고리 전처리본 (학습)
+    dataset/cleaned_emergency_val.csv        응급 카테고리 전처리본 (검증)
+
+  병합 및 학습 데이터
+    dataset/merged_train.csv                 최종 학습 데이터
+    dataset/merged_val.csv                   최종 검증 데이터
+    dataset/llama_train_data_cleaned.json    팀원 제공 RAG 컨텍스트 포함 학습 데이터
+
+  노트북
+    finetune_llama32_sample.ipynb    샘플 실험 노트북 (결과 보존용)
+
+실험 결과 및 방향 전환
+
+  샘플 실험(5,000행 1 epoch) 결과 응답 품질이 기준에 미치지 못하였다.
+
+  주요 문제점:
+    - 동일 문장 반복 생성 (최대 12회)
+    - RAG 검색이 질문과 무관한 사례 반환
+    - 시스템/유저/어시스턴트 프롬프트 태그가 출력에 포함됨
+    - 의미 없는 단어 및 타 언어 혼입 (환각)
+
+  이에 따라 다음과 같이 방식을 변경하기로 하였다:
+    - 학습 데이터 형식을 단순 QA 쌍에서 instruction/input/output 형식으로 변경
+    - RAG 검색 모델을 DistilKoBERT에서 ko-sroberta-multitask로 교체
+    - 유사 QA 2개를 학습 데이터에 미리 포함하여 추론 시 별도 검색 불필요
+    - 전체 데이터 기반으로 재학습 필요

@@ -1,0 +1,31 @@
+LLM 컴포넌트 기술스택 및 설계
+
+기술스택
+
+  데이터 처리:  pandas, json, re
+  LLM 학습:     transformers, peft, trl, bitsandbytes, accelerate
+  STT:          faster-whisper
+  오디오:       sounddevice
+
+데이터 파이프라인
+
+  AI Hub 헬스케어 QA 원본 데이터 (JSON)
+  -> 응급/산악 카테고리 필터링
+  -> question / answer CSV 변환
+  -> 특수문자 제거, 결측치/중복 제거 전처리
+  -> FirstAid 데이터와 병합
+  -> merged_train.csv / merged_val.csv
+
+학습 파이프라인
+
+  merged_train.csv 로드
+  -> Llama 3.2-1B-Instruct 4-bit 양자화 로드
+  -> LoRA 어댑터 적용 (r=16, alpha=32)
+  -> SFTConfig 기반 학습 (1 epoch, 5,000행 샘플)
+  -> 모델 저장
+
+샘플 실험 설정
+
+  BATCH_SIZE: 4 / GRAD_ACCUM: 4 / MAX_LENGTH: 512
+  학습 파라미터: 3,407,872개 (전체의 0.275%)
+  환경: Google Colab T4 16GB / 소요 시간: 약 3시간

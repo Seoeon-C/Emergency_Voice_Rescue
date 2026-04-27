@@ -1,0 +1,42 @@
+LLM 컴포넌트 트러블슈팅 및 제한사항
+
+트러블슈팅 1: SFTTrainer 인자 오류
+
+문제: TypeError: SFTTrainer.__init__() got an unexpected keyword argument 'max_seq_length'
+원인: TRL 라이브러리 업데이트로 max_seq_length가 SFTTrainer에서 SFTConfig으로 이동
+해결: TrainingArguments -> SFTConfig 변경, max_seq_length와 dataset_text_field를 SFTConfig에 작성
+
+
+트러블슈팅 2: BFloat16 충돌 오류
+
+문제: RuntimeError: expected scalar type Half but found BFloat16
+원인: 모델이 BFloat16으로 로드된 상태에서 fp16=True 설정 충돌
+해결: fp16=False, bf16=True 로 변경
+
+
+트러블슈팅 3: HuggingFace 403 Forbidden
+
+문제: Llama 3.2 모델 다운로드 시 403 오류
+원인: Meta 라이선스 동의 미완료 또는 HF 토큰 미설정
+해결: huggingface.co에서 meta-llama/Llama-3.2-1B-Instruct 라이선스 동의 후 토큰 발급
+
+
+트러블슈팅 4: 응답에 시스템 태그 노출
+
+문제: 출력에 system / user / assistant 태그가 그대로 포함됨
+원인: 학습 데이터(단순 QA쌍)가 부족하여 모델이 어시스턴트 응답만 생성하는 방식 미학습
+해결: 전체 데이터 + instruction/input/output 형식으로 재학습 예정
+
+
+트러블슈팅 5: 반복 생성
+
+문제: 동일 문장이 최대 12회 반복 출력됨
+원인: 5,000행 1 epoch로 학습 부족, repetition_penalty 미설정
+해결: 전체 데이터 재학습 예정
+
+
+현재 제한사항
+
+  - 5,000행 1 epoch 샘플 실험 결과는 응답 품질 기준 미달이다.
+  - 전체 데이터 학습 완료 전까지 정상 응답 보장이 어렵다.
+  - 모델 응답은 의료 전문가 판단을 대체할 수 없다.
