@@ -1,0 +1,55 @@
+# --- Python 관련 ---
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+venv/
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- AI/Deep Learning 관련 (용량이 커서 제외) ---
+# 데이터셋과 학습된 가중치 모델은 보통 깃허브에 직접 올리지 않습니다.
+data/raw/
+data/processed/
+*.h5
+*.pt
+*.pth
+*.weights
+*.tflite
+*.ckpt
+
+# --- Jupyter Notebook ---
+.ipynb_checkpoints
+
+# --- 운영체제 및 IDE 관련 ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# --- Flutter (만약 Flutter를 같이 쓰신다면) ---
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+android/**/generated/
+android/app/src/main/res/values/strings.xml
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
