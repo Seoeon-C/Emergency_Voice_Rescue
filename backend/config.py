@@ -25,8 +25,8 @@ class Settings:
     sample_rate: int = int(os.getenv("SAMPLE_RATE", "16000"))
     chunk_seconds: int = int(os.getenv("CHUNK_SECONDS", "5"))
 
-    min_rms_for_stt: float = float(os.getenv("MIN_RMS_FOR_STT", "0.006"))
-    min_peak_for_stt: float = float(os.getenv("MIN_PEAK_FOR_STT", "0.050"))
+    min_rms_for_stt: float = float(os.getenv("MIN_RMS_FOR_STT", "0.004"))
+    min_peak_for_stt: float = float(os.getenv("MIN_PEAK_FOR_STT", "0.030"))
     allow_unknown_stt: bool = env_bool("ALLOW_UNKNOWN_STT", "true")
 
     zone_name: str = os.getenv("ZONE_NAME", "위험구역 A")
@@ -35,9 +35,11 @@ class Settings:
     longitude: str = os.getenv("LONGITUDE", "127.000000")
 
     control_room_webhook: str = os.getenv("CONTROL_ROOM_WEBHOOK", "")
-
     auth_password: str = os.getenv("AUTH_PASSWORD", "1234")
     auth_disable_seconds: int = int(os.getenv("AUTH_DISABLE_SECONDS", "10"))
+
+    intrusion_warn_1_seconds: int = int(os.getenv("INTRUSION_WARN_1_SECONDS", "5"))
+    intrusion_warn_2_seconds: int = int(os.getenv("INTRUSION_WARN_2_SECONDS", "15"))
 
 
 settings = Settings()

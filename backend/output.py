@@ -30,12 +30,10 @@ class FixedMessageSpeaker:
 
     def speak(self, tts_key: str) -> None:
         message = FIXED_TTS_MESSAGES.get(tts_key, "")
-
         if not message:
             return
 
         print(f"[TTS] {message}")
-
         audio_path = self.tts_dir / f"{tts_key}.mp3"
 
         if not audio_path.exists():
@@ -44,7 +42,6 @@ class FixedMessageSpeaker:
 
         pygame.mixer.music.load(str(audio_path))
         pygame.mixer.music.play()
-
         while pygame.mixer.music.get_busy():
             pygame.time.Clock().tick(10)
 
@@ -54,13 +51,7 @@ class EventLoggerAndMessenger:
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
-    def record_and_send(
-        self,
-        decision: DecisionResult,
-        sound_event: SoundEvent,
-        stt_text: str,
-        dwell_seconds: float,
-    ) -> Dict:
+    def record_and_send(self, decision: DecisionResult, sound_event: SoundEvent, stt_text: str, dwell_seconds: float) -> Dict:
         event = {
             "event_time": datetime.now().isoformat(timespec="seconds"),
             "zone_name": settings.zone_name,
@@ -78,8 +69,6 @@ class EventLoggerAndMessenger:
                 "label": sound_event.label,
                 "confidence": round(sound_event.confidence, 4),
                 "raw_label": sound_event.raw_label,
-                "person_detected": sound_event.person_detected,
-                "danger_sound_detected": sound_event.danger_sound_detected,
                 "rms": round(sound_event.rms, 5),
                 "peak": round(sound_event.peak, 5),
             },
@@ -89,26 +78,21 @@ class EventLoggerAndMessenger:
         }
 
         self._write_local(event)
-
         if decision.send_to_control_room:
             self._send_webhook(event)
-
         return event
 
     def _write_local(self, event: Dict) -> None:
         date = datetime.now().strftime("%Y%m%d")
         log_path = self.log_dir / f"events_{date}.jsonl"
-
         with log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
-
         print(f"[LOG] 이벤트 기록 완료: {log_path}")
 
     def _send_webhook(self, event: Dict) -> None:
         if not settings.control_room_webhook:
             print("[CONTROL_ROOM] Webhook 미설정. 로컬 로그만 저장했습니다.")
             return
-
         try:
             response = requests.post(settings.control_room_webhook, json=event, timeout=5)
             print(f"[CONTROL_ROOM] 전송 완료: HTTP {response.status_code}")

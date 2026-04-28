@@ -9,7 +9,12 @@ import soundfile as sf
 
 
 # BEATs 모델 코드가 들어있는 폴더를 import 경로에 추가
-sys.path.append("./unilm/beats")
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+BEATS_DIR = BASE_DIR / "beats"
+
+sys.path.insert(0, str(BEATS_DIR))
 
 # BEATs 모델 클래스와 설정 클래스 가져오기
 from BEATs import BEATs, BEATsConfig
@@ -35,7 +40,7 @@ def load_audioset_ontology():
     """
 
     # 로컬 ontology.json 파일 경로
-    ontology_path = "./ontology.json"
+    ontology_path = BASE_DIR / "beats_runtime" / "ontology.json"
 
     # ontology.json 파일이 없으면 에러 발생
     if not os.path.exists(ontology_path):
