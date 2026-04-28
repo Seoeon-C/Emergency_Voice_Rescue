@@ -24,35 +24,36 @@ class DecisionResult:
 
 
 GPT_SYSTEM_PROMPT = """
-너는 음향 기반 위험구역 안전관리 시스템의 판단 모듈이다.
+너는 위험구역 음향 감지 시스템의 판단 모듈이다.
 
-상황 정의:
-상황 0: 이상없음
-상황 1: 무단침입
-상황 2: 위험 감지
+1차 분류:
+- nature: 자연/배경 소리. pass.
+- speech: 사람 말소리. STT 텍스트로 무단침입/위급 분류.
+- footstep: 발소리. 무단침입.
+- emergency_sound: 비명/충격음/파손음. 위급.
+- unknown: STT 텍스트가 있으면 speech 후보로 판단한다. STT 텍스트가 없으면 pass.
 
-판단 기준:
-- 허가 사용자 인증 상태면 상황 0으로 판단한다.
-- 발소리 또는 사람 말소리가 감지되고 위험구역 체류시간이 5초 이상이면 상황 1의 1차 대응이다.
-- 발소리 또는 사람 말소리가 감지되고 위험구역 체류시간이 15초 이상이면 상황 1의 2차 대응이다.
-- STT 텍스트가 있고 침입 의도 또는 사람 존재를 암시하면 상황 1로 볼 수 있다.
-- 비명, 충격음, 유리 깨짐, 구조 요청 문장이 감지되면 상황 2다.
-- STT 텍스트가 "시청해주셔서 감사합니다", "구독해주세요" 같은 자막형 문구이고 환경음 신뢰도가 낮으면 위험 판단에 사용하지 않는다.
+상황:
+0 이상없음
+1 무단침입
+2 위험 감지
 
-응답 형식:
-반드시 JSON만 출력한다. 마크다운 코드블록을 쓰지 마라.
+규칙:
+1. nature는 상황 0.
+2. footstep은 상황 1.
+3. emergency_sound는 상황 2.
+4. speech 또는 unknown+STT에서 구조 요청/사고/부상/화재/갇힘/쓰러짐/아픔 표현이면 상황 2.
+5. speech 또는 unknown+STT에서 일반 대화, 침입 의도, 탐색, 인기척은 상황 1.
+6. unknown + STT 없음은 상황 0.
+7. 실제 구조대 자동 신고가 아니라 상황실 확인 대상으로 표시한다.
 
-JSON 필드:
-{
-  "situation": 0 또는 1 또는 2,
-  "situation_name": "이상없음" 또는 "무단침입" 또는 "위험 감지",
-  "risk_level": "low" 또는 "medium" 또는 "high",
-  "reason": "판단 이유",
-  "action": "수행할 대응",
-  "tts_key": "NONE" 또는 "INTRUSION_WARN_1" 또는 "INTRUSION_WARN_2" 또는 "EMERGENCY_GUIDE" 또는 "EVACUATION_GUIDE",
-  "send_to_control_room": true 또는 false,
-  "emergency_candidate": true 또는 false
-}
+무단침입 단계:
+- 체류시간 15초 이상: INTRUSION_WARN_2
+- 그 외: INTRUSION_WARN_1
+
+반드시 JSON만 출력한다.
+필드:
+situation, situation_name, risk_level, reason, action, tts_key, send_to_control_room, emergency_candidate
 """
 
 
@@ -60,23 +61,14 @@ class GPTDecisionEngine:
     def __init__(self) -> None:
         if not settings.openai_api_key:
             raise RuntimeError("OPENAI_API_KEY가 .env에 필요합니다.")
-
         self.client = OpenAI(api_key=settings.openai_api_key)
         self.model = settings.openai_llm_model
 
-    def decide(
-        self,
-        sound_event: SoundEvent,
-        stt_text: str,
-        dwell_seconds: float,
-        authorized: bool,
-    ) -> DecisionResult:
-        rule_result = self._rule_based_decision(
-            sound_event=sound_event,
-            stt_text=stt_text,
-            dwell_seconds=dwell_seconds,
-            authorized=authorized,
-        )
+    def decide(self, sound_event: SoundEvent, stt_text: str, dwell_seconds: float, authorized: bool) -> DecisionResult:
+        rule_result = self._rule_based_decision(sound_event, stt_text, dwell_seconds, authorized)
+
+        if self._is_strong_rule(sound_event, stt_text):
+            return self._to_result(rule_result, "")
 
         payload = {
             "zone_name": settings.zone_name,
@@ -92,97 +84,116 @@ class GPTDecisionEngine:
 
         gpt_raw = self._ask_gpt(payload)
         gpt_result = self._parse_json(gpt_raw)
+        final = self._validate_decision(gpt_result or rule_result, sound_event, stt_text, rule_result)
+        return self._to_result(final, gpt_raw)
 
-        final = gpt_result or rule_result
-
-        if rule_result["situation"] == 2 and final.get("situation") == 0:
-            final = rule_result
-
-        return DecisionResult(
-            situation=int(final.get("situation", rule_result["situation"])),
-            situation_name=str(final.get("situation_name", rule_result["situation_name"])),
-            risk_level=str(final.get("risk_level", rule_result["risk_level"])),
-            reason=str(final.get("reason", rule_result["reason"])),
-            action=str(final.get("action", rule_result["action"])),
-            tts_key=str(final.get("tts_key", rule_result["tts_key"])),
-            send_to_control_room=bool(final.get("send_to_control_room", rule_result["send_to_control_room"])),
-            emergency_candidate=bool(final.get("emergency_candidate", rule_result["emergency_candidate"])),
-            raw_gpt=gpt_raw,
-        )
-
-    def _rule_based_decision(
-        self,
-        sound_event: SoundEvent,
-        stt_text: str,
-        dwell_seconds: float,
-        authorized: bool,
-    ) -> Dict[str, Any]:
+    def _rule_based_decision(self, sound_event: SoundEvent, stt_text: str, dwell_seconds: float, authorized: bool) -> Dict[str, Any]:
         if authorized:
-            return {
-                "situation": 0,
-                "situation_name": "이상없음",
-                "risk_level": "low",
-                "reason": "허가된 사용자 인증으로 감지 로직 일시 정지",
-                "action": "감지 로직 비활성 상태 유지",
-                "tts_key": "NONE",
-                "send_to_control_room": False,
-                "emergency_candidate": False,
-            }
+            return self._normal("허가된 사용자 인증으로 감지 로직 일시 정지")
 
-        normalized_text = (stt_text or "").replace(" ", "")
+        if sound_event.label == "nature":
+            return self._normal("자연/배경 소리로 판단하여 pass")
+
+        if sound_event.label == "footstep":
+            return self._intrusion(dwell_seconds, "발소리 감지로 무단침입 판단")
+
+        if sound_event.label == "emergency_sound":
+            return self._emergency("비명/충격음/파손음 등 위험음 감지")
+
+        text = (stt_text or "").replace(" ", "")
 
         emergency_keywords = [
-            "도와주세요", "살려주세요", "119", "구조", "불났", "불이야", "쓰러졌",
-            "다쳤", "피나요", "갇혔", "위험해", "큰일났", "사람이쓰러", "구해주세요",
+            "아파", "아파요", "도와", "살려", "119", "구조", "불났", "불이야",
+            "쓰러", "다쳤", "피", "갇혔", "위험", "큰일", "죽겠", "사고", "넘어졌",
         ]
 
-        if sound_event.danger_sound_detected or any(k in normalized_text for k in emergency_keywords):
-            return {
-                "situation": 2,
-                "situation_name": "위험 감지",
-                "risk_level": "high",
-                "reason": "위험음 또는 응급구조신호 감지",
-                "action": "상황실 긴급 알림 전송 및 현장 대피/응급 안내 방송",
-                "tts_key": "EMERGENCY_GUIDE",
-                "send_to_control_room": True,
-                "emergency_candidate": True,
-            }
+        intrusion_keywords = [
+            "들어가", "가보자", "몰래", "넘어가", "열어", "문열",
+            "누구없", "안에", "들어왔", "사람있", "뭐야", "여기",
+        ]
 
-        if sound_event.person_detected or sound_event.label in {"footstep", "speech"} or bool(stt_text):
-            if dwell_seconds >= 15:
-                return {
-                    "situation": 1,
-                    "situation_name": "무단침입",
-                    "risk_level": "medium",
-                    "reason": "위험구역 내 사람 존재 추정 및 15초 이상 체류",
-                    "action": "2차 경고 방송, 이벤트 기록, 상황실 위치정보 전송",
-                    "tts_key": "INTRUSION_WARN_2",
-                    "send_to_control_room": True,
-                    "emergency_candidate": False,
-                }
+        if sound_event.label in {"speech", "unknown"}:
+            if not text:
+                if sound_event.label == "speech":
+                    return self._normal("말소리로 분류되었지만 유효한 STT 텍스트가 없음")
+                return self._normal("unknown이며 유효한 STT 텍스트가 없어 pass")
 
-            if dwell_seconds >= 5 or bool(stt_text):
-                return {
-                    "situation": 1,
-                    "situation_name": "무단침입",
-                    "risk_level": "low",
-                    "reason": "사람 음성 또는 위험구역 체류 조건 감지",
-                    "action": "1차 경고 방송 및 이벤트 기록",
-                    "tts_key": "INTRUSION_WARN_1",
-                    "send_to_control_room": True,
-                    "emergency_candidate": False,
-                }
+            if any(k in text for k in emergency_keywords):
+                return self._emergency("STT에서 응급/위험 표현 감지")
 
+            if any(k in text for k in intrusion_keywords):
+                return self._intrusion(dwell_seconds, "STT에서 위험구역 진입/탐색 의도 감지")
+
+            return self._intrusion(dwell_seconds, "사람 음성 텍스트 감지")
+
+        return self._normal("판단 조건 미충족")
+
+    def _normal(self, reason: str) -> Dict[str, Any]:
         return {
             "situation": 0,
             "situation_name": "이상없음",
             "risk_level": "low",
-            "reason": "사람 존재, 체류시간, 위험음, 응급구조신호 조건 미충족",
+            "reason": reason,
             "action": "감시 지속",
             "tts_key": "NONE",
             "send_to_control_room": False,
             "emergency_candidate": False,
         }
+
+    def _intrusion(self, dwell_seconds: float, reason: str) -> Dict[str, Any]:
+        if dwell_seconds >= settings.intrusion_warn_2_seconds:
+            return {
+                "situation": 1,
+                "situation_name": "무단침입",
+                "risk_level": "medium",
+                "reason": f"{reason}; 체류시간 {dwell_seconds:.1f}초로 2차 경고 기준 충족",
+                "action": "2차 경고 방송, 이벤트 기록, 상황실 위치정보 전송",
+                "tts_key": "INTRUSION_WARN_2",
+                "send_to_control_room": True,
+                "emergency_candidate": False,
+            }
+
+        return {
+            "situation": 1,
+            "situation_name": "무단침입",
+            "risk_level": "low",
+            "reason": f"{reason}; 1차 경고 대상",
+            "action": "1차 경고 방송 및 이벤트 기록",
+            "tts_key": "INTRUSION_WARN_1",
+            "send_to_control_room": True,
+            "emergency_candidate": False,
+        }
+
+    def _emergency(self, reason: str) -> Dict[str, Any]:
+        return {
+            "situation": 2,
+            "situation_name": "위험 감지",
+            "risk_level": "high",
+            "reason": reason,
+            "action": "상황실 긴급 문자/알림 전송 및 현장 응급 안내",
+            "tts_key": "EMERGENCY_GUIDE",
+            "send_to_control_room": True,
+            "emergency_candidate": True,
+        }
+
+    def _is_strong_rule(self, sound_event: SoundEvent, stt_text: str) -> bool:
+        if sound_event.label in {"nature", "footstep", "emergency_sound"}:
+            return True
+        text = (stt_text or "").replace(" ", "")
+        if any(k in text for k in ["아파", "도와", "살려", "119", "불났", "쓰러", "다쳤", "갇혔"]):
+            return True
+        if sound_event.label == "speech" and not text:
+            return True
+        if sound_event.label == "unknown" and not text:
+            return True
+        return False
+
+    def _validate_decision(self, final: Dict[str, Any], sound_event: SoundEvent, stt_text: str, rule_result: Dict[str, Any]) -> Dict[str, Any]:
+        if sound_event.label in {"nature", "footstep", "emergency_sound"}:
+            return rule_result
+        if sound_event.label == "unknown" and not stt_text:
+            return rule_result
+        return final
 
     def _ask_gpt(self, payload: Dict[str, Any]) -> str:
         try:
@@ -202,15 +213,25 @@ class GPTDecisionEngine:
     def _parse_json(self, text: str) -> Optional[Dict[str, Any]]:
         if not text:
             return None
-
         cleaned = text.strip()
-
         if cleaned.startswith("```"):
             cleaned = cleaned.strip("`").strip()
             if cleaned.startswith("json"):
                 cleaned = cleaned[4:].strip()
-
         try:
             return json.loads(cleaned)
         except Exception:
             return None
+
+    def _to_result(self, data: Dict[str, Any], raw_gpt: str) -> DecisionResult:
+        return DecisionResult(
+            situation=int(data.get("situation", 0)),
+            situation_name=str(data.get("situation_name", "이상없음")),
+            risk_level=str(data.get("risk_level", "low")),
+            reason=str(data.get("reason", "")),
+            action=str(data.get("action", "")),
+            tts_key=str(data.get("tts_key", "NONE")),
+            send_to_control_room=bool(data.get("send_to_control_room", False)),
+            emergency_candidate=bool(data.get("emergency_candidate", False)),
+            raw_gpt=raw_gpt,
+        )
