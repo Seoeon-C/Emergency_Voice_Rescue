@@ -1,21 +1,9 @@
-\
-"""
-output.py
-
-출력 모듈
-
-역할:
-1. 상황별 고정 TTS 메시지 출력
-2. 상황 데이터 로컬 기록
-3. 상황실 webhook 전송
-"""
-
 from __future__ import annotations
 
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 import pygame
 import requests
@@ -35,19 +23,6 @@ FIXED_TTS_MESSAGES: Dict[str, str] = {
 
 
 class FixedMessageSpeaker:
-    """
-    고정 메시지 출력.
-    간단하고 안정적으로 하기 위해 pygame으로 미리 준비된 음성 파일을 재생합니다.
-
-    기본 파일 위치:
-    assets/tts/INTRUSION_WARN_1.mp3
-    assets/tts/INTRUSION_WARN_2.mp3
-    assets/tts/EMERGENCY_GUIDE.mp3
-    assets/tts/EVACUATION_GUIDE.mp3
-
-    파일이 없으면 콘솔에 문구만 출력합니다.
-    """
-
     def __init__(self, tts_dir: str = "assets/tts") -> None:
         self.tts_dir = Path(tts_dir)
         self.tts_dir.mkdir(parents=True, exist_ok=True)
@@ -65,7 +40,6 @@ class FixedMessageSpeaker:
 
         if not audio_path.exists():
             print(f"[TTS] 음성 파일 없음: {audio_path}")
-            print("[TTS] assets/tts 폴더에 같은 이름의 mp3 파일을 넣으면 실제 방송처럼 재생됩니다.")
             return
 
         pygame.mixer.music.load(str(audio_path))
@@ -106,6 +80,8 @@ class EventLoggerAndMessenger:
                 "raw_label": sound_event.raw_label,
                 "person_detected": sound_event.person_detected,
                 "danger_sound_detected": sound_event.danger_sound_detected,
+                "rms": round(sound_event.rms, 5),
+                "peak": round(sound_event.peak, 5),
             },
             "stt_text": stt_text,
             "dwell_seconds": round(dwell_seconds, 2),
@@ -134,11 +110,7 @@ class EventLoggerAndMessenger:
             return
 
         try:
-            response = requests.post(
-                settings.control_room_webhook,
-                json=event,
-                timeout=5,
-            )
+            response = requests.post(settings.control_room_webhook, json=event, timeout=5)
             print(f"[CONTROL_ROOM] 전송 완료: HTTP {response.status_code}")
         except Exception as exc:
             print(f"[WARN] 상황실 전송 실패: {exc}")

@@ -1,25 +1,3 @@
-\
-"""
-environmental_sound.py
-
-환경음 입력/분류 모듈
-
-역할:
-1. 마이크 입력 오디오를 BEATs로 분석
-2. 프로젝트에 필요한 라벨로 변환
-   - background: 이상 없음
-   - footstep: 발소리
-   - speech: 사람 말소리
-   - scream: 비명/고함
-   - impact: 충격음/낙상/파손 의심
-   - glass_break: 유리 깨짐
-   - unknown: 분류 불확실
-
-주의:
-- BEATs는 pip install 방식이 아니라 공식 BEATs.py와 .pt 체크포인트 파일이 필요합니다.
-- 준비 전에도 실행 흐름을 테스트할 수 있도록 fallback 분류를 제공합니다.
-"""
-
 from __future__ import annotations
 
 import importlib.util
@@ -42,6 +20,17 @@ class SoundEvent:
     raw_label: str
     person_detected: bool
     danger_sound_detected: bool
+    rms: float = 0.0
+    peak: float = 0.0
+
+
+def get_audio_stats(audio: np.ndarray) -> tuple[float, float]:
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.size == 0:
+        return 0.0, 0.0
+    rms = float(np.sqrt(np.mean(audio ** 2)))
+    peak = float(np.max(np.abs(audio)))
+    return rms, peak
 
 
 class BeatsEnvironmentClassifier:
@@ -85,19 +74,17 @@ class BeatsEnvironmentClassifier:
         model.to(self.device)
 
         self.model = model
-
-        # 일부 checkpoint에는 label_names가 없을 수 있습니다.
-        # 없으면 class index만 raw_label로 표시합니다.
         self.labels = checkpoint.get("label_names", [])
 
     def classify(self, audio: np.ndarray, sr: int) -> SoundEvent:
+        rms, peak = get_audio_stats(audio)
         audio = self._prepare_audio(audio, sr)
 
         if audio.size == 0:
-            return SoundEvent("background", 0.0, "empty", False, False)
+            return SoundEvent("background", 0.0, "empty", False, False, rms, peak)
 
         if not self.ready:
-            return self._fallback_classify(audio)
+            return self._fallback_classify(audio, rms, peak)
 
         with torch.no_grad():
             wav = torch.tensor(audio, dtype=torch.float32).unsqueeze(0).to(self.device)
@@ -117,12 +104,17 @@ class BeatsEnvironmentClassifier:
         raw_label = self.labels[idx] if self.labels and idx < len(self.labels) else f"class_{idx}"
         label = self._map_raw_label(raw_label)
 
+        if confidence < 0.01 and rms < settings.min_rms_for_stt and peak < settings.min_peak_for_stt:
+            label = "background"
+
         return SoundEvent(
             label=label,
             confidence=confidence,
             raw_label=raw_label,
             person_detected=label in {"footstep", "speech"},
             danger_sound_detected=label in {"scream", "impact", "glass_break"},
+            rms=rms,
+            peak=peak,
         )
 
     def _prepare_audio(self, audio: np.ndarray, sr: int) -> np.ndarray:
@@ -141,42 +133,26 @@ class BeatsEnvironmentClassifier:
         return audio.astype(np.float32)
 
     def _map_raw_label(self, raw_label: str) -> str:
-        """
-        BEATs/AudioSet raw label을 프로젝트 라벨로 매핑합니다.
-        실제 데이터셋으로 fine-tuning하면 이 부분을 팀 label에 맞게 단순화할 수 있습니다.
-        """
         text = raw_label.lower()
 
         if any(k in text for k in ["footstep", "walk", "walking", "steps"]):
             return "footstep"
-
         if any(k in text for k in ["speech", "talk", "conversation", "human voice", "male speech", "female speech"]):
             return "speech"
-
         if any(k in text for k in ["scream", "screaming", "yell", "shout", "cry"]):
             return "scream"
-
         if any(k in text for k in ["crash", "bang", "thump", "slam", "impact", "explosion"]):
             return "impact"
-
         if any(k in text for k in ["glass", "shatter", "breaking"]):
             return "glass_break"
-
         if any(k in text for k in ["silence", "ambient", "background"]):
             return "background"
 
         return "unknown"
 
-    def _fallback_classify(self, audio: np.ndarray) -> SoundEvent:
-        """
-        BEATs 세팅 전 실행 확인용 fallback.
-        실제 환경음 분류 성능은 기대하면 안 됩니다.
-        """
-        rms = float(np.sqrt(np.mean(audio ** 2))) if audio.size else 0.0
+    def _fallback_classify(self, audio: np.ndarray, rms: float, peak: float) -> SoundEvent:
+        if rms < settings.min_rms_for_stt and peak < settings.min_peak_for_stt:
+            return SoundEvent("background", 0.8, "fallback_silence", False, False, rms, peak)
 
-        if rms < 0.015:
-            return SoundEvent("background", 0.8, "fallback_low_energy", False, False)
-
-        # 소리가 있으면 unknown으로 둠.
-        # 이 경우 main.py에서 필요 시 STT를 시도할 수 있습니다.
-        return SoundEvent("unknown", min(0.95, rms * 10), "fallback_high_energy", False, False)
+        # fallback에서는 정확히 speech를 모른다. 그래서 unknown으로 두고 main에서 음량 기준 STT를 시도한다.
+        return SoundEvent("unknown", min(0.95, rms * 10), "fallback_audio_detected", False, False, rms, peak)

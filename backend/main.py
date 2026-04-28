@@ -1,19 +1,3 @@
-\
-"""
-main.py
-
-SoundGuard 실행 파일
-
-사용 모델:
-- BEATs: 환경음/위험음 분류
-- Whisper API: 사람 말소리 STT
-- Gemini 1.5 Pro: 상황 0/1/2 판단
-- Fixed TTS: 저장된 고정 안내 음성 출력
-
-실행:
-    python main.py
-"""
-
 from __future__ import annotations
 
 import sys
@@ -37,7 +21,7 @@ import sounddevice as sd
 import soundfile as sf
 
 from config import settings
-from decision import GeminiDecisionEngine
+from decision import GPTDecisionEngine
 from environmental_sound import BeatsEnvironmentClassifier, SoundEvent
 from output import EventLoggerAndMessenger, FixedMessageSpeaker
 from stt import WhisperAPI
@@ -48,12 +32,6 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class AuthorizationManager:
-    """
-    허가된 사용자 구분:
-    - 버튼 대신 콘솔 입력으로 구현
-    - 비밀번호 성공 시 10초 동안 감지 로직 OFF
-    """
-
     def __init__(self) -> None:
         self.disabled_until = 0.0
 
@@ -80,23 +58,19 @@ class AuthorizationManager:
 
 
 class DwellTimeTracker:
-    """
-    위험구역 체류시간 계산.
-    실제 제품에서는 PIR 센서, 거리 센서, 라이다, GPS, 카메라 등의 접근 정보와 결합할 수 있음.
-    이 MVP에서는 '사람 존재 추정 소리'가 연속 감지되는 시간을 체류시간으로 봄.
-    """
-
     def __init__(self) -> None:
         self.person_detected_since: Optional[float] = None
 
-    def update(self, sound_event: SoundEvent) -> float:
+    def update(self, sound_event: SoundEvent, stt_text: str = "") -> float:
         now = time.time()
 
-        if sound_event.person_detected or sound_event.label in {"footstep", "speech", "unknown"}:
+        # 명확한 사람 소리이거나 STT 텍스트가 있으면 체류로 인정
+        if sound_event.person_detected or sound_event.label in {"footstep", "speech"} or bool(stt_text):
             if self.person_detected_since is None:
                 self.person_detected_since = now
             return now - self.person_detected_since
 
+        # unknown은 누적하지 않음. 단, STT가 나온 경우는 위에서 누적됨.
         if not sound_event.danger_sound_detected:
             self.person_detected_since = None
 
@@ -107,7 +81,7 @@ class SoundGuardApp:
     def __init__(self) -> None:
         self.env_classifier = BeatsEnvironmentClassifier()
         self.stt = WhisperAPI()
-        self.decision_engine = GeminiDecisionEngine()
+        self.decision_engine = GPTDecisionEngine()
         self.speaker = FixedMessageSpeaker()
         self.logger = EventLoggerAndMessenger()
         self.auth = AuthorizationManager()
@@ -115,10 +89,12 @@ class SoundGuardApp:
 
     def run(self) -> None:
         print("=" * 70)
-        print("SoundGuard 실행")
+        print("SoundGuard 실행 - GPT 판단 / STT 균형 버전")
         print(f"위험구역: {settings.zone_name}")
         print(f"위치: {settings.location_text}")
         print(f"좌표: {settings.latitude}, {settings.longitude}")
+        print(f"STT 무음 필터: RMS>={settings.min_rms_for_stt}, PEAK>={settings.min_peak_for_stt}")
+        print(f"ALLOW_UNKNOWN_STT={settings.allow_unknown_stt}")
         print("종료: Ctrl+C")
         print("=" * 70)
 
@@ -136,25 +112,36 @@ class SoundGuardApp:
                 print(
                     f"[ENV] label={sound_event.label}, "
                     f"conf={sound_event.confidence:.3f}, "
-                    f"raw={sound_event.raw_label}"
+                    f"raw={sound_event.raw_label}, "
+                    f"rms={sound_event.rms:.5f}, peak={sound_event.peak:.5f}"
                 )
 
-                dwell_seconds = self.dwell_tracker.update(sound_event)
-                print(f"[ZONE] 체류 추정 시간: {dwell_seconds:.1f}초")
-
-                # 사람 말소리 또는 분류 불확실한 경우 STT 시도
                 stt_text = ""
-                if sound_event.label in {"speech", "unknown"} or sound_event.person_detected:
+                should_try_stt = (
+                    sound_event.label == "speech"
+                    or (
+                        settings.allow_unknown_stt
+                        and sound_event.label == "unknown"
+                        and (sound_event.rms >= settings.min_rms_for_stt or sound_event.peak >= settings.min_peak_for_stt)
+                    )
+                )
+
+                if should_try_stt:
                     try:
-                        stt_text = self.stt.transcribe(audio_path)
-                        if stt_text:
-                            print(f"[STT] {stt_text}")
+                        if self.stt.should_transcribe(audio):
+                            stt_text = self.stt.transcribe(audio_path)
+                            if stt_text:
+                                print(f"[STT] {stt_text}")
+                            else:
+                                print("[STT] 인식된 유효 문장 없음")
                     except Exception as exc:
                         print(f"[WARN] STT 실패: {exc}")
 
-                # 초기 침입 감지 단계에서 허가 사용자 인증 기회 제공
+                dwell_seconds = self.dwell_tracker.update(sound_event, stt_text=stt_text)
+                print(f"[ZONE] 체류 추정 시간: {dwell_seconds:.1f}초")
+
                 authorized = False
-                if (sound_event.person_detected or sound_event.label == "unknown") and dwell_seconds < 5:
+                if (sound_event.person_detected or bool(stt_text)) and dwell_seconds < 5:
                     authorized = self.auth.request_auth_if_needed()
 
                 decision = self.decision_engine.decide(
@@ -173,7 +160,6 @@ class SoundGuardApp:
                 if decision.tts_key != "NONE":
                     self.speaker.speak(decision.tts_key)
 
-                # 상황 0도 로컬 기록하고 싶다면 아래 조건을 제거하면 됨.
                 if decision.situation in {1, 2} or decision.send_to_control_room:
                     event = self.logger.record_and_send(
                         decision=decision,

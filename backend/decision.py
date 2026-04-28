@@ -1,30 +1,10 @@
-\
-"""
-decision.py
-
-Gemini 1.5 Pro 기반 판단 모듈
-
-상황 정의:
-- 상황 0: 이상없음
-- 상황 1: 무단침입
-  - 1차 대응: 현장 경고 방송
-  - 기록/상황실 전송
-  - 2차 대응: 지속 체류 시 2차 경고 및 상황실 위치정보 전송
-- 상황 2: 위험 감지
-  - 응급구조신호 확인 시 상황실 긴급 알림
-  - 분류 결과 기반 저장된 음성 출력
-
-안전상 주의:
-- 실제 구조대 자동 신고가 아니라, 상황실 판단용 메시지 생성까지 수행합니다.
-"""
-
 from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
 from typing import Dict, Any, Optional
 
-from google import genai
+from openai import OpenAI
 
 from config import settings
 from environmental_sound import SoundEvent
@@ -40,35 +20,24 @@ class DecisionResult:
     tts_key: str
     send_to_control_room: bool
     emergency_candidate: bool
-    raw_gemini: str = ""
+    raw_gpt: str = ""
 
 
-GEMINI_SYSTEM_PROMPT = """
+GPT_SYSTEM_PROMPT = """
 너는 음향 기반 위험구역 안전관리 시스템의 판단 모듈이다.
-
-목표:
-- 출입 허가되지 않은 위험구역에 누군가 무단침입했는지 판단한다.
-- 응급구조신호 또는 위험음이 감지되면 위험 감지로 판단한다.
-- 실제 구조대 자동 신고를 확정하지 말고, 상황실 판단용 긴급 알림 대상으로 표시한다.
 
 상황 정의:
 상황 0: 이상없음
 상황 1: 무단침입
 상황 2: 위험 감지
 
-입력:
-- 환경음 분류 결과
-- STT 텍스트
-- 위험구역 체류시간
-- 허가 사용자 인증 여부
-- 위치정보
-
 판단 기준:
 - 허가 사용자 인증 상태면 상황 0으로 판단한다.
 - 발소리 또는 사람 말소리가 감지되고 위험구역 체류시간이 5초 이상이면 상황 1의 1차 대응이다.
 - 발소리 또는 사람 말소리가 감지되고 위험구역 체류시간이 15초 이상이면 상황 1의 2차 대응이다.
+- STT 텍스트가 있고 침입 의도 또는 사람 존재를 암시하면 상황 1로 볼 수 있다.
 - 비명, 충격음, 유리 깨짐, 구조 요청 문장이 감지되면 상황 2다.
-- 구조 요청 문장 예: 도와주세요, 살려주세요, 119 불러줘, 사람이 쓰러졌어요, 불났어요, 갇혔어요, 다쳤어요.
+- STT 텍스트가 "시청해주셔서 감사합니다", "구독해주세요" 같은 자막형 문구이고 환경음 신뢰도가 낮으면 위험 판단에 사용하지 않는다.
 
 응답 형식:
 반드시 JSON만 출력한다. 마크다운 코드블록을 쓰지 마라.
@@ -87,13 +56,13 @@ JSON 필드:
 """
 
 
-class GeminiDecisionEngine:
+class GPTDecisionEngine:
     def __init__(self) -> None:
-        if not settings.gemini_api_key:
-            raise RuntimeError("GEMINI_API_KEY가 .env에 필요합니다.")
+        if not settings.openai_api_key:
+            raise RuntimeError("OPENAI_API_KEY가 .env에 필요합니다.")
 
-        self.client = genai.Client(api_key=settings.gemini_api_key)
-        self.model = settings.gemini_model
+        self.client = OpenAI(api_key=settings.openai_api_key)
+        self.model = settings.openai_llm_model
 
     def decide(
         self,
@@ -121,13 +90,11 @@ class GeminiDecisionEngine:
             "rule_based_result": rule_result,
         }
 
-        gemini_raw = self._ask_gemini(payload)
-        gemini_result = self._parse_json(gemini_raw)
+        gpt_raw = self._ask_gpt(payload)
+        gpt_result = self._parse_json(gpt_raw)
 
-        final = gemini_result or rule_result
+        final = gpt_result or rule_result
 
-        # 안전 우선 보정:
-        # rule이 상황 2인데 Gemini가 상황 0으로 낮추면 rule을 유지
         if rule_result["situation"] == 2 and final.get("situation") == 0:
             final = rule_result
 
@@ -140,7 +107,7 @@ class GeminiDecisionEngine:
             tts_key=str(final.get("tts_key", rule_result["tts_key"])),
             send_to_control_room=bool(final.get("send_to_control_room", rule_result["send_to_control_room"])),
             emergency_candidate=bool(final.get("emergency_candidate", rule_result["emergency_candidate"])),
-            raw_gemini=gemini_raw,
+            raw_gpt=gpt_raw,
         )
 
     def _rule_based_decision(
@@ -165,20 +132,8 @@ class GeminiDecisionEngine:
         normalized_text = (stt_text or "").replace(" ", "")
 
         emergency_keywords = [
-            "도와주세요",
-            "살려주세요",
-            "119",
-            "구조",
-            "불났",
-            "불이야",
-            "쓰러졌",
-            "다쳤",
-            "피나요",
-            "갇혔",
-            "위험해",
-            "큰일났",
-            "사람이쓰러",
-            "구해주세요",
+            "도와주세요", "살려주세요", "119", "구조", "불났", "불이야", "쓰러졌",
+            "다쳤", "피나요", "갇혔", "위험해", "큰일났", "사람이쓰러", "구해주세요",
         ]
 
         if sound_event.danger_sound_detected or any(k in normalized_text for k in emergency_keywords):
@@ -193,7 +148,7 @@ class GeminiDecisionEngine:
                 "emergency_candidate": True,
             }
 
-        if sound_event.person_detected or sound_event.label in {"footstep", "speech", "unknown"}:
+        if sound_event.person_detected or sound_event.label in {"footstep", "speech"} or bool(stt_text):
             if dwell_seconds >= 15:
                 return {
                     "situation": 1,
@@ -206,12 +161,12 @@ class GeminiDecisionEngine:
                     "emergency_candidate": False,
                 }
 
-            if dwell_seconds >= 5:
+            if dwell_seconds >= 5 or bool(stt_text):
                 return {
                     "situation": 1,
                     "situation_name": "무단침입",
                     "risk_level": "low",
-                    "reason": "위험구역 내 사람 존재 추정 및 5초 이상 체류",
+                    "reason": "사람 음성 또는 위험구역 체류 조건 감지",
                     "action": "1차 경고 방송 및 이벤트 기록",
                     "tts_key": "INTRUSION_WARN_1",
                     "send_to_control_room": True,
@@ -229,17 +184,19 @@ class GeminiDecisionEngine:
             "emergency_candidate": False,
         }
 
-    def _ask_gemini(self, payload: Dict[str, Any]) -> str:
-        prompt = GEMINI_SYSTEM_PROMPT + "\n\n입력 데이터:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
-
+    def _ask_gpt(self, payload: Dict[str, Any]) -> str:
         try:
-            response = self.client.models.generate_content(
+            response = self.client.chat.completions.create(
                 model=self.model,
-                contents=prompt,
+                messages=[
+                    {"role": "system", "content": GPT_SYSTEM_PROMPT},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False, indent=2)},
+                ],
+                temperature=0,
             )
-            return (response.text or "").strip()
+            return (response.choices[0].message.content or "").strip()
         except Exception as exc:
-            print(f"[WARN] Gemini 판단 실패. rule 기반 판단을 사용합니다: {exc}")
+            print(f"[WARN] GPT 판단 실패. rule 기반 판단을 사용합니다: {exc}")
             return ""
 
     def _parse_json(self, text: str) -> Optional[Dict[str, Any]]:
