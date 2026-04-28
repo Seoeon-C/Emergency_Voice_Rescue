@@ -53,3 +53,12 @@ android/**/generated/
 android/app/src/main/res/values/strings.xml
 ios/Flutter/Generated.xcconfig
 ios/Flutter/flutter_export_environment.sh
+
+#backend
+backend/.env
+backend/checkpoints/
+backend/outputs/
+backend/assets/tts/
+
+#frontend
+frontend/node_modules/
