@@ -8,9 +8,9 @@ from typing import Dict
 import pygame
 import requests
 
-from config import BACKEND_DIR, settings
-from decision_v2_v2 import DecisionResult
-from environmental_sound import SoundEvent
+from .config import BACKEND_DIR, settings
+from .decision import DecisionResult
+from .environmental_sound import SoundEvent
 
 
 FIXED_TTS_MESSAGES: Dict[str, str] = {

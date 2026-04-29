@@ -2,31 +2,27 @@
 
 SoundGuard는 소리를 기반으로 위험 구역의 무단침입과 응급상황을 감지하는 프로젝트입니다.
 
-마이크로 5초 단위 음성을 수집한 뒤, 프로젝트 데이터로 전이학습한 BEATs 모델이 환경음을 5개 클래스로 분류합니다. 이후 Whisper STT와 상황 판단 로직을 함께 사용해 배경음, 침입 가능성, 긴급 구조 요청을 구분합니다.
+마이크로 5초 단위 음성을 수집한 뒤, 프로젝트 데이터로 전이학습한 BEATs 모델이 환경음을 5개 클래스로 분류합니다. 이후 Whisper STT와 판단 로직을 함께 사용해 배경음, 침입 가능성, 긴급 구조 요청을 구분합니다.
 
-## 최종 처리 흐름
+## 처리 흐름
 
 ```text
 소리 수집
--> 16kHz mono 입력
 -> BEATs 전이학습 모델 분류
 -> background이면 이벤트 없음
--> intrusion이면 1차 경고 후 지속 감지 시 상황실 전송
+-> intrusion이면 경고 후 지속 감지 시 상황실 전송
 -> emergency이면 즉시 긴급 알림
 -> 필요 시 Whisper STT로 구조 요청 문장 확인
 ```
 
-## 주요 폴더
+## 구조
 
 ```text
-main.py             루트 실행 파일
-backend/            최종 실행 코드
-pre_processing/     학습 manifest 생성 및 데이터 전처리 코드
-transfer_learning/  BEATs 전이학습 코드, 보고서, 성능 비교 그래프 생성 코드
-GPT_tuning/         GPT 판단 방식 실험 코드
+main.py   실행 파일
+backend/  최종 백엔드 코드
 ```
 
-## 실행 방법
+## 실행
 
 ```powershell
 cd C:\Users\Chan\Desktop\a
@@ -58,4 +54,4 @@ impact_noise
 loud_noise
 ```
 
-최종 성능은 `transfer_learning/BEATs_전이학습_전처리_보고서.md`와 바탕화면의 `BEATs 성능지표 그래프` 자료를 참고하면 됩니다.
+전처리/전이학습 실험 코드와 성능 그래프 자료는 git에서 제외하고 별도 백업 폴더에 보관합니다.

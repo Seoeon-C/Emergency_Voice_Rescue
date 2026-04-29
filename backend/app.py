@@ -9,11 +9,11 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-from config import BACKEND_DIR, settings
-from decision_v2_v2 import GPTDecisionEngine, DecisionResult
-from environmental_sound import BeatsEnvironmentClassifier, SoundEvent
-from output_v2 import EventLoggerAndMessenger, FixedMessageSpeaker
-from stt import WhisperAPI
+from .config import BACKEND_DIR, settings
+from .decision import GPTDecisionEngine, DecisionResult
+from .environmental_sound import BeatsEnvironmentClassifier, SoundEvent
+from .output import EventLoggerAndMessenger, FixedMessageSpeaker
+from .stt import WhisperAPI
 
 
 TEMP_DIR = BACKEND_DIR / "outputs/temp"
@@ -104,6 +104,7 @@ class SoundGuardApp:
         self.logger = EventLoggerAndMessenger()
         self.auth = AuthorizationManager()
         self.dwell_tracker = DwellTimeTracker()
+        self.cycle_no = 0
 
     def _safe_create_stt(self):
         try:
@@ -146,12 +147,7 @@ class SoundGuardApp:
                     continue
 
                 sound_event = self.env_classifier.classify(audio, settings.sample_rate)
-
                 stt_text = ""
-
-                # [FIX] BEATs가 situation=0으로 오분류해도 충분한 음량이면 STT 실행
-                # 기존: situation in {1, 2} 일 때만 STT 호출
-                # 수정: situation in {1, 2} 이거나 음량이 STT 기준 이상이면 호출
                 stt_trigger = (
                     sound_event.situation in {1, 2}
                     or sound_event.rms >= settings.min_rms_for_stt
@@ -161,7 +157,6 @@ class SoundGuardApp:
                     stt_text = self._try_stt(audio, audio_path)
 
                 dwell_seconds = self.dwell_tracker.update(sound_event, stt_text=stt_text)
-
                 decision = self.decision_engine.decide(
                     sound_event=sound_event,
                     stt_text=stt_text,
@@ -169,7 +164,6 @@ class SoundGuardApp:
                     authorized=False,
                 )
 
-                # [FIX] 2차 경고는 반드시 1차 경고 발령 이후에만 가능
                 if decision.tts_key == "INTRUSION_WARN_2" and not self.dwell_tracker.warn1_issued:
                     print("[WARN_ORDER] 1차 경고 미발령 상태. INTRUSION_WARN_2 → INTRUSION_WARN_1 강제 변환")
                     decision = DecisionResult(
@@ -184,16 +178,10 @@ class SoundGuardApp:
                         source=decision.source + " (forced warn1)",
                     )
 
-                # BEATs가 실제 사람을 감지했을 때만 1차 발령 기록
-                # 배경 소음 STT 단독으로 warn1_issued가 세팅되면 2차가 바로 나올 수 있음
                 if decision.tts_key == "INTRUSION_WARN_1" and sound_event.situation in {1, 2}:
                     self.dwell_tracker.warn1_issued = True
 
-                print(
-                    f"[RESULT] {decision.situation_name} | "
-                    f"sound={sound_event.raw_label} | "
-                    f"stt={stt_text or '없음'}"
-                )
+                self._print_cycle_summary(sound_event, stt_text, dwell_seconds, decision)
 
                 if decision.tts_key != "NONE":
                     self.speaker.speak(decision.tts_key)
@@ -208,6 +196,24 @@ class SoundGuardApp:
 
         except KeyboardInterrupt:
             print("\nSoundGuard 종료")
+
+    def _print_cycle_summary(
+        self,
+        sound_event: SoundEvent,
+        stt_text: str,
+        dwell_seconds: float,
+        decision: DecisionResult,
+    ) -> None:
+        self.cycle_no += 1
+        print("-" * 70)
+        print(f"[CYCLE {self.cycle_no}] 최종 판단: {decision.situation} {decision.situation_name}")
+        print(
+            f"  BEATs: {sound_event.raw_label} "
+            f"(conf={sound_event.confidence:.3f}, rms={sound_event.rms:.5f}, peak={sound_event.peak:.5f})"
+        )
+        print(f"  STT: {stt_text or '없음'}")
+        print(f"  dwell: {dwell_seconds:.1f}s | source: {decision.source} | tts: {decision.tts_key}")
+        print("-" * 70)
 
     def _try_stt(self, audio: np.ndarray, audio_path: Path) -> str:
         if self.stt is None:
@@ -226,7 +232,7 @@ class SoundGuardApp:
         return ""
 
     def _record_audio(self) -> np.ndarray:
-        print(f"[REC] {settings.chunk_seconds}초 녹음 중...")
+        print(f"\n[REC] {settings.chunk_seconds}초 녹음 중...")
 
         audio = sd.rec(
             int(settings.sample_rate * settings.chunk_seconds),
