@@ -69,45 +69,52 @@ class BeatsEnvironmentClassifier:
         self.model = None
         self.labels: List[str] = []
         self.ready = False
-        self.model, self.label_dict = load_model(settings.beats_checkpoint_path)
-        try:
-            self._load_beats()
-            self.ready = True
-            print("[BEATs] 모델 로드 성공")
-        except Exception as exc:
-            print(f"[WARN] BEATs 모델 로드 실패. fallback 모드로 실행합니다: {exc}")
+        # self.model, self.label_dict = load_model(settings.beats_checkpoint_path)
+        # try:
+        #     self._load_beats()
+        #     self.ready = True
+        #     print("[BEATs] 모델 로드 성공")
+        # except Exception as exc:
+        #     print(f"[WARN] BEATs 모델 로드 실패. fallback 모드로 실행합니다: {exc}")
 
-    def _load_beats(self) -> None:
-        beats_py = Path(settings.beats_py_dir) / "BEATs.py"
-        checkpoint_path = Path(settings.beats_checkpoint_path)
-        beats_dir = Path(settings.beats_py_dir).resolve()
+    # def _load_beats(self) -> None:
+    #     beats_py = Path(settings.beats_py_dir) / "BEATs.py"
+    #     checkpoint_path = Path(settings.beats_checkpoint_path)
+    #     beats_dir = Path(settings.beats_py_dir).resolve()
 
-        if str(beats_dir) not in sys.path:
-            sys.path.insert(0, str(beats_dir))
+    #     if str(beats_dir) not in sys.path:
+    #         sys.path.insert(0, str(beats_dir))
 
-        if not beats_py.exists():
-            raise FileNotFoundError(f"BEATs.py 파일을 찾을 수 없습니다: {beats_py}")
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(f"BEATs 체크포인트를 찾을 수 없습니다: {checkpoint_path}")
+    #     if not beats_py.exists():
+    #         raise FileNotFoundError(f"BEATs.py 파일을 찾을 수 없습니다: {beats_py}")
+    #     if not checkpoint_path.exists():
+    #         raise FileNotFoundError(f"BEATs 체크포인트를 찾을 수 없습니다: {checkpoint_path}")
 
-        spec = importlib.util.spec_from_file_location("beats_module", str(beats_py))
-        if spec is None or spec.loader is None:
-            raise RuntimeError("BEATs.py import 준비 실패")
+    #     spec = importlib.util.spec_from_file_location("beats_module", str(beats_py))
+    #     if spec is None or spec.loader is None:
+    #         raise RuntimeError("BEATs.py import 준비 실패")
 
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["beats_module"] = module
-        spec.loader.exec_module(module)
+    #     module = importlib.util.module_from_spec(spec)
+    #     sys.modules["beats_module"] = module
+    #     spec.loader.exec_module(module)
+    #     import pathlib
+    #     import torch
 
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
-        cfg = module.BEATsConfig(checkpoint["cfg"])
+    #     torch.serialization.add_safe_globals([pathlib.WindowsPath])
+    #     checkpoint = torch.load(
+    #         checkpoint_path,
+    #         map_location="cpu",
+    #         weights_only=False
+    #     )
+    #     cfg = module.BEATsConfig(checkpoint["cfg"])
 
-        model = module.BEATs(cfg)
-        model.load_state_dict(checkpoint["model"])
-        model.eval()
-        model.to(self.device)
+    #     model = module.BEATs(cfg)
+    #     model.load_state_dict(checkpoint["model"])
+    #     model.eval()
+    #     model.to(self.device)
 
-        self.model = model
-        self.labels = checkpoint.get("label_names", [])
+    #     self.model = model
+    #     self.labels = checkpoint.get("label_names", [])
 
     def classify(self, audio: np.ndarray, sr: int) -> SoundEvent:
         rms, peak = get_audio_stats(audio)

@@ -1,6 +1,25 @@
 from __future__ import annotations
 
+# backend/server.py
+import sys
+import os
+from pathlib import Path
 import threading
+# --- 중요: main.py와 동일한 경로 로직 추가 ---
+current_dir = Path(__file__).resolve().parent
+beats_path = str(current_dir / "beats")
+if beats_path not in sys.path:
+    sys.path.insert(0, beats_path)
+# ------------------------------------------
+
+import asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime
+
+app = FastAPI()
+
+import getpass
 import time
 from pathlib import Path
 from typing import Optional
