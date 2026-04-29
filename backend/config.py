@@ -52,7 +52,7 @@ class Settings:
     latitude: str = os.getenv("LATITUDE", "37.000000")
     longitude: str = os.getenv("LONGITUDE", "127.000000")
 
-    control_room_webhook: str = os.getenv("CONTROL_ROOM_WEBHOOK", "")
+    #control_room_webhook: str = os.getenv("CONTROL_ROOM_WEBHOOK", "")
     auth_password: str = os.getenv("AUTH_PASSWORD", "1234")
     auth_disable_seconds: int = int(os.getenv("AUTH_DISABLE_SECONDS", "10"))
 
