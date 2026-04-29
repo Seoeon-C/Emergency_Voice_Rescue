@@ -4,7 +4,7 @@ from openai import OpenAI
 from .config import settings
 
 
-client = OpenAI(api_key=settings.openai_api_key)
+client = OpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
 MODEL = settings.openai_llm_model
 
 
@@ -158,6 +158,10 @@ def _rule_based(payload: dict) -> dict:
 
 
 def _ask_gpt(payload: dict) -> dict | None:
+    if client is None:
+        print("[WARN] OPENAI_API_KEY 미설정. 룰 기반으로 판단합니다.")
+        return None
+
     try:
         response = client.chat.completions.create(
             model=MODEL,

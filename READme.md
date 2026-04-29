@@ -29,6 +29,27 @@ cd C:\Users\Chan\Desktop\a
 C:\Users\Chan\anaconda3\envs\firstaid-gpu\python.exe main.py
 ```
 
+## 자가진단
+
+실행 전에 필요한 패키지, 설정 파일, 모델 파일, 마이크, 스피커, 출력 폴더를 확인할 수 있습니다.
+자가진단 중에는 스피커에서 짧은 테스트 소리가 나오고, 마이크가 그 소리를 받는지 확인합니다.
+
+```powershell
+C:\Users\Chan\anaconda3\envs\firstaid-gpu\python.exe -m backend.self_check
+```
+
+모델 로딩을 빼고 빠르게 확인하려면:
+
+```powershell
+C:\Users\Chan\anaconda3\envs\firstaid-gpu\python.exe -m backend.self_check --quick
+```
+
+스피커-마이크 테스트를 생략하려면:
+
+```powershell
+C:\Users\Chan\anaconda3\envs\firstaid-gpu\python.exe -m backend.self_check --no-audio-check
+```
+
 처음 받는 팀원은 `backend\.env.example`을 참고해 `backend\.env`를 만들고 API 키를 입력해야 합니다.
 
 ## 모델 파일

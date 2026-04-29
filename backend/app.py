@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 import sounddevice as sd
@@ -13,6 +13,7 @@ from .config import BACKEND_DIR, settings
 from .decision import GPTDecisionEngine, DecisionResult
 from .environmental_sound import BeatsEnvironmentClassifier, SoundEvent
 from .output import EventLoggerAndMessenger, FixedMessageSpeaker
+from .self_check import run_self_check
 from .stt import WhisperAPI
 
 
@@ -21,9 +22,19 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class AuthorizationManager:
-    def __init__(self) -> None:
+    def __init__(self, self_check_callback: Optional[Callable[[], None]] = None) -> None:
         self._disable_until = 0.0
+        self._control_active = False
         self._lock = threading.Lock()
+        self._self_check_callback = self_check_callback
+
+    def is_control_active(self) -> bool:
+        with self._lock:
+            return self._control_active
+
+    def _set_control_active(self, active: bool) -> None:
+        with self._lock:
+            self._control_active = active
 
     def is_disabled(self) -> bool:
         with self._lock:
@@ -51,22 +62,38 @@ class AuthorizationManager:
         thread.start()
 
     def _loop(self) -> None:
-        print("[ADMIN] p 입력 후 Enter: 관리자 인증")
+        print("[ADMIN] p 입력: 관리자 인증 | c 입력: 자가진단 | h 입력: 도움말")
 
         while True:
             try:
                 command = input().strip().lower()
 
                 if command in {"p", "pause", "admin"}:
-                    self.authenticate_and_disable()
+                    self._run_control_command("관리자 인증", self.authenticate_and_disable)
+
+                elif command in {"c", "check", "self-check", "selfcheck"}:
+                    if self._self_check_callback is None:
+                        print("[SELF_CHECK] 자가진단 기능이 연결되지 않았습니다.")
+                    else:
+                        self._run_control_command("자가진단", self._self_check_callback)
 
                 elif command in {"h", "help"}:
-                    print("[ADMIN] p 입력 후 Enter: 관리자 인증 후 일시 비활성화")
+                    print("[ADMIN] p 입력: 관리자 인증 후 일시 비활성화")
+                    print("[ADMIN] c 입력: 실행 중 빠른 자가진단")
 
             except EOFError:
                 break
             except Exception as exc:
                 print(f"[ADMIN] 입력 처리 오류: {exc}")
+
+    def _run_control_command(self, name: str, action: Callable[[], None]) -> None:
+        self._set_control_active(True)
+        print(f"[SYSTEM] {name} 처리 중입니다. 감지 로직을 일시정지합니다.")
+        try:
+            action()
+        finally:
+            self._set_control_active(False)
+            print(f"[SYSTEM] {name} 처리가 끝났습니다. 감지 로직을 재개합니다.")
 
 
 class DwellTimeTracker:
@@ -102,9 +129,11 @@ class SoundGuardApp:
         self.decision_engine = GPTDecisionEngine()
         self.speaker = FixedMessageSpeaker()
         self.logger = EventLoggerAndMessenger()
-        self.auth = AuthorizationManager()
+        self.auth = AuthorizationManager(self_check_callback=self._run_self_check)
         self.dwell_tracker = DwellTimeTracker()
         self.cycle_no = 0
+        self.audio_lock = threading.Lock()
+        self.control_pause_notified = False
 
     def _safe_create_stt(self):
         try:
@@ -112,6 +141,14 @@ class SoundGuardApp:
         except Exception as exc:
             print(f"[WARN] STT 비활성화: {exc}")
             return None
+
+    def _run_self_check(self) -> None:
+        print("\n[SELF_CHECK] 실행 중 자가진단을 시작합니다.")
+        print("[SELF_CHECK] 스피커 테스트 소리가 짧게 재생됩니다.")
+        print("[SELF_CHECK] 이미 로드된 모델이 있으므로 모델 재로딩은 생략합니다.")
+        print("[SELF_CHECK] 현재 녹음이 끝나면 자가진단을 시작합니다.")
+        with self.audio_lock:
+            run_self_check(load_model=False, audio_loopback=True)
 
     def run(self) -> None:
         print("=" * 70)
@@ -131,6 +168,18 @@ class SoundGuardApp:
 
         try:
             while True:
+                if self.auth.is_control_active():
+                    self.dwell_tracker.reset()
+                    if not self.control_pause_notified:
+                        print("[SYSTEM] 제어 명령 처리 중... 감지를 일시정지합니다.")
+                        self.control_pause_notified = True
+                    time.sleep(0.2)
+                    continue
+
+                if self.control_pause_notified:
+                    print("[SYSTEM] 감지를 재개합니다.")
+                    self.control_pause_notified = False
+
                 if self.auth.is_disabled():
                     self.dwell_tracker.reset()
                     remain = self.auth.remaining_seconds()
@@ -141,9 +190,9 @@ class SoundGuardApp:
                 audio = self._record_audio()
                 audio_path = self._save_audio(audio)
 
-                if self.auth.is_disabled():
+                if self.auth.is_disabled() or self.auth.is_control_active():
                     self.dwell_tracker.reset()
-                    print("[SYSTEM] 녹음 후 비활성화 상태 확인됨. 이번 입력은 처리하지 않습니다.")
+                    print("[SYSTEM] 제어/비활성화 상태 확인됨. 이번 녹음은 처리하지 않습니다.")
                     continue
 
                 sound_event = self.env_classifier.classify(audio, settings.sample_rate)
@@ -234,14 +283,14 @@ class SoundGuardApp:
     def _record_audio(self) -> np.ndarray:
         print(f"\n[REC] {settings.chunk_seconds}초 녹음 중...")
 
-        audio = sd.rec(
-            int(settings.sample_rate * settings.chunk_seconds),
-            samplerate=settings.sample_rate,
-            channels=1,
-            dtype="float32",
-        )
-
-        sd.wait()
+        with self.audio_lock:
+            audio = sd.rec(
+                int(settings.sample_rate * settings.chunk_seconds),
+                samplerate=settings.sample_rate,
+                channels=1,
+                dtype="float32",
+            )
+            sd.wait()
         return audio.squeeze()
 
     def _save_audio(self, audio: np.ndarray) -> Path:
