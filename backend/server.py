@@ -6,27 +6,16 @@ from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-# 1. 경로 설정 (BEATs 폴더가 있는 backend 폴더를 패스에 추가)
+# 1. 경로 설정
 current_dir = Path(__file__).resolve().parent
 sys.path.append(str(current_dir))
-
-app = FastAPI()
-
-from pathlib import Path
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-import asyncio
-from datetime import datetime
-
-# 1. BEATs 모델 경로 설정 (main.py와 동일)
-current_dir = Path(__file__).resolve().parent
 beats_path = str(current_dir / "beats")
 if beats_path not in sys.path:
     sys.path.insert(0, beats_path)
 
 app = FastAPI()
 
-# 2. CORS 설정: 리액트 앱의 접속 허용
+# 2. CORS 설정
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -34,6 +23,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 3. DecisionResult 클래스 직접 정의 (ImportError 방지)
+class DecisionResult:
+    def __init__(self, situation, situation_name, risk_level, reason, action, tts_key, send_to_control_room, emergency_candidate, source):
+        self.situation = situation
+        self.situation_name = situation_name
+        self.risk_level = risk_level
+        self.reason = reason
+        self.action = action
+        self.tts_key = tts_key
+        self.send_to_control_room = send_to_control_room
+        self.emergency_candidate = emergency_candidate
+        self.source = source
 
 guard_app = None
 
@@ -50,38 +52,26 @@ async def websocket_endpoint(websocket: WebSocket):
     print("✅ [Server] 리액트 대시보드 연결 성공")
 
     try:
-        app_instance = get_guard_app() # 한 번 생성된 인스턴스 재사용
-        import main # settings 등을 참조하기 위해 필요
+        app_instance = get_guard_app() 
+        import main # 로직 참조용
         
         while True:
-            # 리액트에게 녹음 중임을 알림
+            # 변수 초기화 (UnboundLocalError 방지)
+            stt_text = ""
+            
+            # 리액트에게 상태 알림
             await websocket.send_json({"type": "status", "message": "recording"})
             
             # A. 녹음 및 저장
-            audio = guard_app._record_audio()
-            audio_path = guard_app._save_audio(audio)
+            audio = app_instance._record_audio()
+            audio_path = app_instance._save_audio(audio)
 
-            '''
-            # B. 환경 소리 분석 (튜닝된 BEATs)
-            sound_event = guard_app.env_classifier.classify(audio, main.settings.sample_rate)
-            
-            # C. 튜닝된 STT 트리거 로직 적용
-            stt_text = ""
-            stt_trigger = (
-                sound_event.situation in {1, 2}
-                or sound_event.rms >= main.settings.min_rms_for_stt
-                or sound_event.peak >= main.settings.min_peak_for_stt
-            )
-            '''
+            # B. 환경 소리 분석 (main.settings 대신 getattr 사용으로 안전하게 가져옴)
+            sample_rate = getattr(app_instance, 'sample_rate', 16000)
+            sound_event = app_instance.env_classifier.classify(audio, sample_rate)
 
-            # 수정 후 (guard_app이 가지고 있는 속성을 확인)
-            # 만약 main.py에서 sample_rate를 별도로 정의했다면 그 값을 직접 써주거나 guard_app에서 가져옵니다.
-            sample_rate = getattr(guard_app, 'sample_rate', 16000) # 기본값 16000, 없을 경우 대비
-            sound_event = guard_app.env_classifier.classify(audio, sample_rate)
-
-            # C. STT 트리거 로직 부분도 수정
-            # main.settings.min_rms_for_stt 대신 직접 수치를 입력하거나 guard_app의 속성을 사용하세요.
-            min_rms = 0.004  # 로그에 찍혔던 기준값
+            # C. STT 트리거 로직 (수치 직접 입력으로 에러 방지)
+            min_rms = 0.004  
             min_peak = 0.03
             stt_trigger = (
                 sound_event.situation in {1, 2}
@@ -90,22 +80,20 @@ async def websocket_endpoint(websocket: WebSocket):
             )
 
             if stt_trigger:
-                stt_text = guard_app._try_stt(audio, audio_path)
+                stt_text = app_instance._try_stt(audio, audio_path)
 
-            # D. 체류 시간 및 상황 판단 (튜닝된 main.py의 로직 그대로 사용)
-            dwell_seconds = guard_app.dwell_tracker.update(sound_event, stt_text=stt_text)
+            # D. 체류 시간 및 상황 판단
+            dwell_seconds = app_instance.dwell_tracker.update(sound_event, stt_text=stt_text)
             
-            # 웹에서는 인증 입력을 받을 수 없으므로 authorized=False 고정
-            decision = guard_app.decision_engine.decide(
+            decision = app_instance.decision_engine.decide(
                 sound_event=sound_event,
                 stt_text=stt_text,
                 dwell_seconds=dwell_seconds,
                 authorized=False,
             )
 
-            # [튜닝 로직 반영] 1차 경고 미발령 시 2차 경고 강제 변환
-            if decision.tts_key == "INTRUSION_WARN_2" and not guard_app.dwell_tracker.warn1_issued:
-                from main import DecisionResult
+            # [튜닝 로직] 1차 경고 미발령 시 2차 경고 강제 변환
+            if decision.tts_key == "INTRUSION_WARN_2" and not app_instance.dwell_tracker.warn1_issued:
                 decision = DecisionResult(
                     situation=decision.situation,
                     situation_name=decision.situation_name,
@@ -120,7 +108,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # 1차 발령 기록 업데이트
             if decision.tts_key == "INTRUSION_WARN_1" and sound_event.situation in {1, 2}:
-                guard_app.dwell_tracker.warn1_issued = True
+                app_instance.dwell_tracker.warn1_issued = True
 
             # E. 데이터 전송
             payload = {
@@ -138,7 +126,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # F. TTS 출력
             if decision.tts_key != "NONE":
-                guard_app.speaker.speak(decision.tts_key)
+                app_instance.speaker.speak(decision.tts_key)
 
             await asyncio.sleep(0.1)
 
