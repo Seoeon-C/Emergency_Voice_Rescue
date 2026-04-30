@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 from openai import OpenAI
 
-from config import settings
+from .config import settings
 
 
 SUBTITLE_HALLUCINATION_PHRASES = [
@@ -57,16 +57,7 @@ class WhisperAPI:
     def _clean_transcript(self, text: str) -> str:
         compact = text.replace(" ", "").replace(".", "").replace("!", "").replace("?", "")
 
-        hallucination_compacts = [
-            phrase.replace(" ", "").replace(".", "").replace("!", "").replace("?", "")
-            for phrase in SUBTITLE_HALLUCINATION_PHRASES
-        ]
-
-        for phrase in hallucination_compacts:
-            if phrase in compact:
-                print(f"[STT] 자막형 환각 문구로 판단하여 무시: {text}")
-                return ""
-
+        # 응급 키워드가 있으면 환각 필터보다 먼저 통과 (응급 텍스트가 환각으로 오인되는 문제 방지)
         emergency_keywords = [
             "아파", "아파요", "도와", "살려", "119", "구조", "불났",
             "쓰러", "다쳤", "갇혔", "위험", "피", "넘어졌"
@@ -74,6 +65,17 @@ class WhisperAPI:
 
         if any(k in compact for k in emergency_keywords):
             return text
+
+        # 완전 일치만 환각으로 처리 (부분 포함은 허용)
+        hallucination_compacts = [
+            phrase.replace(" ", "").replace(".", "").replace("!", "").replace("?", "")
+            for phrase in SUBTITLE_HALLUCINATION_PHRASES
+        ]
+
+        for phrase in hallucination_compacts:
+            if compact == phrase:
+                print(f"[STT] 자막형 환각 문구로 판단하여 무시: {text}")
+                return ""
 
         if len(compact) <= 1:
             return ""

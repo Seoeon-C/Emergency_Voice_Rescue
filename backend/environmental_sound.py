@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import librosa
 
-from config import BACKEND_DIR, settings
+from .config import BACKEND_DIR, settings
 
 
 beats_dir = Path(settings.beats_py_dir).resolve()
