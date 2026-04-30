@@ -12,6 +12,51 @@ sys.path.append(str(current_dir))
 if str(current_dir / "beats") not in sys.path:
     sys.path.insert(0, str(current_dir / "beats"))
 
+from environmental_sound import SPEECH_LABELS, INTRUSION_LABELS
+
+# SPEECH_LABELS 중 비명/울음 계열만 별도 분리
+_SCREAM_LABELS = {
+    "Screaming", "Yell", "Shout", "Children shouting",
+    "Wail, moan", "Whimper", "Crying, sobbing", "Baby cry, infant cry",
+    "Groan", "Gasp",
+}
+
+# 프로젝트 전이학습 레이블 → 4개 카테고리 매핑
+_PROJECT_LABEL_MAP = {
+    "intrusion":    "발소리",
+    "impact_noise": "발소리",
+    "emergency":    "비명소리",
+    "background":   "환경음",
+    "loud_noise":   "환경음",
+}
+
+_CATEGORIES = ["발소리", "말소리", "비명소리", "환경음"]
+
+
+def _compute_category_scores(top_labels, model_kind: str) -> dict:
+    """top_labels → 4개 고정 카테고리 점수 (합산 100%)."""
+    scores = {c: 0.0 for c in _CATEGORIES}
+
+    for name, score in top_labels:
+        if model_kind == "project":
+            cat = _PROJECT_LABEL_MAP.get(name, "환경음")
+        else:
+            if name in _SCREAM_LABELS:
+                cat = "비명소리"
+            elif name in SPEECH_LABELS:
+                cat = "말소리"
+            elif name in INTRUSION_LABELS:
+                cat = "발소리"
+            else:
+                cat = "환경음"
+        scores[cat] += score
+
+    total = sum(scores.values())
+    if total > 0:
+        scores = {k: round(v / total * 100, 1) for k, v in scores.items()}
+
+    return scores
+
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -102,18 +147,24 @@ async def websocket_endpoint(websocket: WebSocket):
                 "status": {
                     "level": decision.situation,
                     "name": decision.situation_name,
-                    "duration": round(dwell_seconds)
+                    "duration": round(dwell_seconds),
+                    "warn1_issued": app_instance.dwell_tracker.warn1_issued,
                 },
                 "analysis": {
                     "label": sound_event.label,
-                    "rms": float(sound_event.rms),
-                    "peak": float(sound_event.peak),
-                    # 대시보드 그래프용 확률 (가상값 포함)
-                    "scores": {
-                        "footstep": round(float(sound_event.rms * 10000), 1), 
-                        "voice": 10 if stt_text else 0,
-                        "noise": round(float(sound_event.peak * 100), 1)
-                    }
+                    "confidence": round(sound_event.confidence * 100, 1),
+                    "category_scores": _compute_category_scores(
+                        sound_event.top_labels,
+                        app_instance.env_classifier.model_kind,
+                    ),
+                },
+                "decision": {
+                    "risk_level": decision.risk_level,
+                    "reason": decision.reason,
+                    "tts_key": decision.tts_key,
+                    "emergency_candidate": decision.emergency_candidate,
+                    "send_to_control_room": decision.send_to_control_room,
+                    "source": decision.source,
                 },
                 "stt_text": stt_text,
                 "action_msg": decision.action
