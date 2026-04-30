@@ -193,11 +193,23 @@ function App() {
 
       {/* 중앙: 지도 및 실시간 알림 */}
       <main>
-        <div className="card" style={{ height: '400px', position: 'relative', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-          <div style={{ textAlign: 'center', color: '#475569' }}>
-            <div className="animate-ping" style={{ width: '20px', height: '200px', position: 'absolute' }} />
-            📍 수락산 위험구간 감시 중<br />
-            <small>37.5665° N, 126.9780° E</small>
+        <div className="card" style={{ height: '400px', padding: 0, overflow: 'hidden', position: 'relative', borderRadius: '12px' }}>
+          <iframe
+            src={`/map.html?key=${process.env.REACT_APP_VWORLD_API_KEY || ''}`}
+            title="VWorld 감시 지도"
+            width="100%"
+            height="100%"
+            frameBorder="0"
+            style={{ display: 'block', borderRadius: '12px' }}
+          />
+          {/* 지도 위 위치 정보 라벨 */}
+          <div style={{
+            position: 'absolute', bottom: '10px', left: '10px',
+            background: 'rgba(15,23,42,0.8)', color: '#94a3b8',
+            padding: '4px 10px', borderRadius: '6px', fontSize: '0.7rem',
+            pointerEvents: 'none',
+          }}>
+            📍 수락산 위험구간 | 37.5665° N, 126.9780° E
           </div>
         </div>
 
