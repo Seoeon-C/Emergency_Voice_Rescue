@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass
 from openai import OpenAI
-from .config import settings
+from config import settings
 
 
 client = OpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None

@@ -8,7 +8,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Callable, Iterable
 
-from ..config import BACKEND_DIR, settings
+from config import BACKEND_DIR, settings
 
 
 @dataclass
@@ -242,7 +242,7 @@ def _check_model_load() -> Iterable[CheckResult]:
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            from ..environmental_sound import BeatsEnvironmentClassifier
+            from environmental_sound import BeatsEnvironmentClassifier
 
             classifier = BeatsEnvironmentClassifier()
         if classifier.ready:

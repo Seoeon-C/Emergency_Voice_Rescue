@@ -47,8 +47,9 @@
   <div id="map"></div>
 
   <script>
-    var LAT = 37.5665;
-    var LON = 126.9780;
+    var params = new URLSearchParams(window.location.search);
+    var LAT = parseFloat(params.get("lat")) || 37.5665;
+    var LON = parseFloat(params.get("lon")) || 126.9780;
     var VWORLD_KEY = new URLSearchParams(window.location.search).get('key') || '';
 
     var map = L.map('map', {
@@ -61,7 +62,10 @@
     //L.tileLayer(base + '/Base/{z}/{y}/{x}.png',    { maxZoom: 19, attribution: '© VWorld' }).addTo(map); //기본
     //L.tileLayer(base + '/gray/{z}/{y}/{x}.png',    { maxZoom: 19, attribution: '© VWorld' }).addTo(map); //흑백
     //L.tileLayer(base + '/satellite/{z}/{y}/{x}.png',{ maxZoom: 19, attribution: '© VWorld' }).addTo(map); //위성
-
+    // L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    //     maxZoom: 19,
+    //     attribution: '© OpenStreetMap'
+    //   }).addTo(map);
     // ── 감시 지점 마커 ────────────────────────────────────────────────────────
     var pulseIcon = L.divIcon({
       className: '',

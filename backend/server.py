@@ -6,8 +6,8 @@ import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from .config import settings
-from .app import SoundGuardApp
+from config import settings
+from app import SoundGuardApp
 
 current_dir = Path(__file__).resolve().parent
 beats_path = str(current_dir / "beats")
@@ -192,3 +192,8 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"❌ [Server] 런타임 에러 발생: {e}")
     finally:
         print("🔌 [Server] WebSocket 세션 종료")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)

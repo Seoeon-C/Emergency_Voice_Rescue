@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 from openai import OpenAI
 
-from .config import settings
+from config import settings
 
 
 SUBTITLE_HALLUCINATION_PHRASES = [

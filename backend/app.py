@@ -9,12 +9,12 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-from .config import BACKEND_DIR, settings
-from .decision import GPTDecisionEngine, DecisionResult
-from .environmental_sound import BeatsEnvironmentClassifier, SoundEvent
-from .output import EventLoggerAndMessenger, FixedMessageSpeaker
-from .self_check import run_self_check
-from .stt import WhisperAPI
+from config import BACKEND_DIR, settings
+from decision import GPTDecisionEngine, DecisionResult
+from environmental_sound import BeatsEnvironmentClassifier, SoundEvent
+from output import EventLoggerAndMessenger, FixedMessageSpeaker
+from self_check import run_self_check
+from stt import WhisperAPI
 
 
 TEMP_DIR = BACKEND_DIR / "outputs/temp"
