@@ -1,103 +1,120 @@
-import React, { useEffect, useState } from 'react';
-import { ShieldCheck, Activity } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import './App.css';
 
 function App() {
-  // 1. 필요한 모든 상태(State) 선언
+  const [data, setData] = useState(null);
+  const [status, setStatus] = useState("연결 시도 중...");
   const [logs, setLogs] = useState([]);
-  const [isRecording, setIsRecording] = useState(false);
-  const [currentStatus, setCurrentStatus] = useState({ code: 0, label: '대기 중' });
+  const socket = useRef(null);
 
   useEffect(() => {
-    let ws;
-    
-    // 연결을 시도하는 함수
     const connect = () => {
-      ws = new WebSocket("ws://localhost:8000/ws");
+      socket.current = new WebSocket("ws://localhost:8000/ws");
 
-      ws.onopen = () => console.log("✅ 백엔드와 연결 성공!");
+      socket.current.onopen = () => {
+        setStatus("연결 성공 (관제 중)");
+        console.log("Connected to Backend");
+      };
 
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        console.log("받은 데이터:", data);
-
-        if (data.type === "status") {
-          setIsRecording(data.message === "recording");
-          return;
-        }
-
-        setLogs((prev) => [data, ...prev].slice(0, 20));
-        setIsRecording(false);
-        
-        if (data.situation !== undefined) {
-          setCurrentStatus({ 
-            code: data.situation, 
-            label: data.situation_name || '분석 완료' 
-          });
+      socket.current.onmessage = (event) => {
+        const response = JSON.parse(event.data);
+        if (response.type === "data") {
+          setData(response);
+          setLogs(prev => [response, ...prev].slice(0, 15));
+        } else if (response.type === "status") {
+          setStatus(response.message === "recording" ? "음성 분석 중..." : "일시 정지");
         }
       };
 
-      ws.onerror = (err) => {
-        console.error("❌ 연결 에러:", err);
+      socket.current.onclose = () => {
+        setStatus("서버 연결 끊김. 재시도 중...");
+        setTimeout(connect, 3000); // 3초 후 재연결
       };
 
-      ws.onclose = () => {
-        console.log("🔌 연결이 닫혔습니다. 3초 후 재연결 시도...");
-        setTimeout(connect, 3000); // 서버가 죽었을 때 자동으로 다시 붙게 함
+      socket.current.onerror = (err) => {
+        console.error("Socket Error: ", err);
+        socket.current.close();
       };
     };
 
     connect();
-
-    // 컴포넌트가 사라질 때 연결 정리
-    return () => {
-      if (ws) ws.close();
-    };
+    return () => socket.current?.close();
   }, []);
 
-  // 2. 리턴문은 단 하나여야 합니다!
+  const sendCommand = (action, key = "") => {
+    if (socket.current?.readyState === WebSocket.OPEN) {
+      socket.current.send(JSON.stringify({ type: "CONTROL", action, key }));
+    }
+  };
+
   return (
-    <div className={`min-h-screen p-8 font-mono transition-colors duration-500 ${
-      currentStatus.code === 2 ? 'bg-red-900 text-white' : 
-      currentStatus.code === 1 ? 'bg-orange-900 text-white' : 'bg-gray-900 text-green-400'
-    }`}>
-      <h1 className="text-3xl font-bold flex items-center gap-2 mb-6">
-        <ShieldCheck /> SoundGuard 실시간 모니터링
-      </h1>
+    <div className="dashboard">
+      <header className="header">
+        <h1>🛡️ SoundGuard Control Center</h1>
+        <div style={{display: 'flex', gap: '10px', alignItems: 'center'}}>
+          <span>{status}</span>
+          <button className="btn-pause" onClick={() => sendCommand("PAUSE")}>⏸ 감지 일시정지</button>
+        </div>
+      </header>
 
-      {/* 녹음 상태 표시등 */}
-      <div className="mb-4 h-6">
-        {isRecording && <div className="animate-pulse text-yellow-400">● 현장 소리 녹음 및 AI 분석 중...</div>}
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* 상태 요약 판넬 */}
-        <div className="bg-black/40 p-6 rounded-lg border border-current">
-          <h2 className="text-xl mb-4 flex items-center gap-2">
-            <Activity /> 현재 상태: {currentStatus.label}
-          </h2>
-          {currentStatus.code === 2 && <div className="text-5xl animate-bounce">🚨 EMERGENCY 🚨</div>}
+      {/* 왼쪽: 상태 및 분석 */}
+      <aside className="card-group">
+        <div className={`card ${data?.status.level > 0 ? 'status-critical' : ''}`}>
+          <small>현재 상태</small>
+          <h2>{data?.status.name || "정상상황"}</h2>
+          <div className="timer">{data?.status.duration.toString().padStart(2, '0')}:00</div>
         </div>
 
-        {/* 로그 창 */}
-        <div className="bg-black p-4 rounded border border-gray-700 h-[500px] overflow-y-auto text-sm">
-          <h3 className="text-gray-500 mb-2 border-b border-gray-800 pb-2">실시간 감지 로그</h3>
-          {logs.length === 0 && <div className="text-gray-600 italic">감지된 이벤트가 없습니다.</div>}
-          {logs.map((log, i) => (
-            <div key={i} className="mb-3 border-b border-gray-800 pb-2">
-              <div className="flex justify-between text-xs opacity-50 mb-1">
-                <span>[{log.timestamp}]</span>
-                <span className={log.situation === 2 ? 'text-red-400' : 'text-green-400'}>
-                  위험도: {log.situation}
-                </span>
+        <div className="card" style={{marginTop: '20px'}}>
+          <h3>음량 분석</h3>
+          {['footstep', 'voice', 'noise'].map(key => (
+            <div key={key} className="progress-container">
+              <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.7rem'}}>
+                <span>{key.toUpperCase()}</span>
+                <span>{data?.analysis.scores[key] || 0}%</span>
               </div>
-              <div>
-                <span className="font-bold text-blue-400">[{log.env_label}]</span> {log.reason}
+              <div className="progress-bar">
+                <div className="progress-fill" style={{width: `${data?.analysis.scores[key] || 0}%`}}></div>
               </div>
-              {log.stt_text && <div className="text-yellow-200 mt-1 italic">" {log.stt_text} "</div>}
             </div>
           ))}
         </div>
-      </div>
+      </aside>
+
+      {/* 중앙: 지도 및 실시간 알림 */}
+      <main>
+        <div className="card" style={{height: '400px', position: 'relative', display:'flex', justifyContent:'center', alignItems:'center'}}>
+          <div style={{textAlign:'center', color:'#475569'}}>
+            <div className="animate-ping" style={{width:'20px', height:'200px', position:'absolute'}}></div>
+            📍 수락산 위험구간 감시 중<br/>
+            <small>37.5665° N, 126.9780° E</small>
+          </div>
+        </div>
+        <div className="card" style={{marginTop: '20px', borderLeft: '5px solid #3b82f6'}}>
+          <span style={{color: '#3b82f6', fontWeight: 'bold'}}>📢 안내 메시지:</span>
+          <p>{data?.action_msg || "시스템 가동 중입니다."}</p>
+        </div>
+      </main>
+
+      {/* 오른쪽: 제어 및 로그 */}
+      <aside className="card-group">
+        <div className="card btn-group">
+          <h3>강제 방송 제어</h3>
+          <button className="btn-primary" onClick={() => sendCommand("FORCE_TTS", "INTRUSION_WARN_1")}>1차 경고 방송</button>
+          <button onClick={() => sendCommand("FORCE_TTS", "EMERGENCY_GUIDE")}>응급 구조 안내</button>
+        </div>
+
+        <div className="card" style={{marginTop: '20px', height: '350px', overflowY: 'auto'}}>
+          <h3>이벤트 로그</h3>
+          {logs.map((log, i) => (
+            <div key={i} className="log-item">
+              <div style={{color:'#64748b'}}>{log.timestamp}</div>
+              <strong>{log.status.name}</strong>
+              <div style={{fontSize:'0.7rem'}}>{log.stt_text || log.analysis.label}</div>
+            </div>
+          ))}
+        </div>
+      </aside>
     </div>
   );
 }
