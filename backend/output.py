@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+
 import pygame
 import requests
 
-from config import settings
-from decision import DecisionResult
-from environmental_sound import SoundEvent
+from .config import BACKEND_DIR, settings
+from .decision import DecisionResult
+from .environmental_sound import SoundEvent
 
 
 FIXED_TTS_MESSAGES: Dict[str, str] = {
@@ -25,9 +28,12 @@ FIXED_TTS_MESSAGES: Dict[str, str] = {
 class FixedMessageSpeaker:
     def __init__(self, tts_dir: str = "assets/tts") -> None:
         self.tts_dir = Path(tts_dir)
+        if not self.tts_dir.is_absolute():
+            self.tts_dir = BACKEND_DIR / self.tts_dir
         self.tts_dir.mkdir(parents=True, exist_ok=True)
         pygame.mixer.init()
-
+    def get_message(self, tts_key: str) -> str:
+        return FIXED_TTS_MESSAGES.get(tts_key, "")
     def speak(self, tts_key: str) -> None:
         message = FIXED_TTS_MESSAGES.get(tts_key, "")
         if not message:
@@ -49,6 +55,8 @@ class FixedMessageSpeaker:
 class EventLoggerAndMessenger:
     def __init__(self, log_dir: str = "outputs/logs") -> None:
         self.log_dir = Path(log_dir)
+        if not self.log_dir.is_absolute():
+            self.log_dir = BACKEND_DIR / self.log_dir
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
     def record_and_send(self, decision: DecisionResult, sound_event: SoundEvent, stt_text: str, dwell_seconds: float) -> Dict:
