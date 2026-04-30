@@ -32,7 +32,8 @@ class FixedMessageSpeaker:
             self.tts_dir = BACKEND_DIR / self.tts_dir
         self.tts_dir.mkdir(parents=True, exist_ok=True)
         pygame.mixer.init()
-
+    def get_message(self, tts_key: str) -> str:
+        return FIXED_TTS_MESSAGES.get(tts_key, "")
     def speak(self, tts_key: str) -> None:
         message = FIXED_TTS_MESSAGES.get(tts_key, "")
         if not message:

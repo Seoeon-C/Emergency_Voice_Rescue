@@ -233,7 +233,10 @@ class GPTDecisionEngine:
         raw_label = getattr(sound_event, "raw_label", "")
         is_project_emergency = raw_label == "emergency"
         clear_non_emergency_speech = bool(_normalize_text(stt_text)) and not _has_emergency_keyword(stt_text)
-
+        
+        if raw_label == "emergency" and clear_non_emergency_speech:
+            sound_event.situation = 1
+            sound_event.label = "침입 신호"
         payload = {
             "sound_event": {
                 "label": sound_event.label,
