@@ -137,7 +137,9 @@ def _rule_based(payload: dict) -> dict:
 
     person_signal = person or abnormal or danger or label in {"footstep", "speech", "말소리", "기타 이상 소리"} or bool(stt_text)
     if person_signal:
-        if dwell >= 5:
+        # settings.intrusion_warn_1_seconds 이상 체류 시 2차 경고
+        # (실제 에스컬레이션 타이밍은 app의 warn1_issued 플래그가 최종 결정)
+        if dwell >= settings.intrusion_warn_1_seconds:
             return {
                 "situation": 1, "situation_name": "무단침입", "risk_level": "medium",
                 "reason": "1차 경고 이후 추가 소리 감지", "action": "2차 경고 방송 및 상황실 전송",
@@ -198,7 +200,7 @@ def decide(payload: dict) -> DecisionResult:
         if gpt:
             if rule["situation"] == 2 and gpt.get("situation", 0) == 0:
                 final, source = rule, "rule (safety override)"
-            # [FIX] 2차 경고를 GPT가 1차 경고로 다운그레이드하지 못하게 방지
+            # 2차 경고를 GPT가 1차 경고로 다운그레이드하지 못하게 방지
             elif rule.get("tts_key") == "INTRUSION_WARN_2" and gpt.get("tts_key") == "INTRUSION_WARN_1":
                 final, source = rule, "rule (warn2 guard)"
             elif clear_non_emergency_speech and acoustic_emergency_candidate and gpt.get("situation", 0) == 2:
@@ -207,6 +209,11 @@ def decide(payload: dict) -> DecisionResult:
                 final, source = gpt, "gpt"
         else:
             final, source = rule, "rule (gpt fallback)"
+
+    # situation=2인데 tts_key가 없거나 침입 경고 키면 EMERGENCY_GUIDE로 보정
+    if int(final.get("situation", 0)) == 2 and str(final.get("tts_key", "")) not in {"EMERGENCY_GUIDE", "EVACUATION_GUIDE"}:
+        final = {**final, "tts_key": "EMERGENCY_GUIDE", "send_to_control_room": True, "emergency_candidate": True}
+        source += " (emergency tts fix)"
 
     return DecisionResult(
         situation=int(final["situation"]),
