@@ -83,6 +83,7 @@ frontend/.env.production
 frontend/.env.development.local
 frontend/.env.test.local
 frontend/.env.production.local
+*.mp4
 frontend/npm-debug.log*
 frontend/yarn-debug.log*
 frontend/yarn-error.log*

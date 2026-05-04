@@ -295,6 +295,12 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const [clock,    setClock]    = useState(nowStr())
   const wsRef = useRef(null)
   const reconnectRef = useRef(null)
+  const mapPanelRef = useRef(null)
+  const cctvWindowRef = useRef(null)
+  const [cctvWidthPercent, setCctvWidthPercent] = useState(40)
+  const [cctvPopupOpen, setCctvPopupOpen] = useState(false)
+  const [cctvLatchedActive, setCctvLatchedActive] = useState(false)
+  const [cctvAlertStatus, setCctvAlertStatus] = useState(1)
 
   const [mentPopup, setMentPopup] = useState(false)
   const [mentEditModal, setMentEditModal] = useState(false)
@@ -308,6 +314,26 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const [notifications, setNotifications] = useState([])
   const [selfCheckRunning, setSelfCheckRunning] = useState(false)
   const [selfCheckResult, setSelfCheckResult] = useState(null)
+
+  useEffect(() => {
+    if (status !== 0) {
+      setCctvLatchedActive(true)
+      setCctvAlertStatus(status)
+    }
+  }, [status])
+
+  useEffect(() => {
+    if (!cctvPopupOpen) return
+
+    const timer = setInterval(() => {
+      if (cctvWindowRef.current && cctvWindowRef.current.closed) {
+        cctvWindowRef.current = null
+        setCctvPopupOpen(false)
+      }
+    }, 500)
+
+    return () => clearInterval(timer)
+  }, [cctvPopupOpen])
 
   const statusRef  = useRef(status)
   const pausedRef  = useRef(paused)
@@ -737,12 +763,157 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     `&addr=${encodeURIComponent(mapAddr || "관할 구역 주소 미상")}` +
     `&status=${status === 2 ? "danger" : status === 1 ? "warning" : "normal"}` +
     `&key=${encodeURIComponent(VWORLD_KEY || "")}`
+  const cctvEventActive = cctvLatchedActive
+  const cctvVisible = cctvEventActive && !cctvPopupOpen
+  const cctvVideoSrc = "/test_video.mp4"
+  const cctvStatus = cctvAlertStatus || 1
+  const closeCctvView = () => {
+    setCctvLatchedActive(false)
+    setCctvPopupOpen(false)
+    if (cctvWindowRef.current && !cctvWindowRef.current.closed) {
+      cctvWindowRef.current.close()
+    }
+    cctvWindowRef.current = null
+  }
+  const openCctvPopup = () => {
+    const existingWindow = cctvWindowRef.current
+    if (existingWindow && !existingWindow.closed) {
+      existingWindow.focus()
+      setCctvPopupOpen(true)
+      return
+    }
+
+    const popup = window.open(
+      "",
+      "soundguard-cctv-popup",
+      "popup=yes,width=1120,height=680,left=120,top=80,resizable=yes,scrollbars=no"
+    )
+
+    if (!popup) {
+      alert("팝업이 차단되었습니다. 브라우저 팝업 허용 후 다시 눌러주세요.")
+      return
+    }
+
+    const videoUrl = new URL(cctvVideoSrc, window.location.origin).href
+    const accentColor = cctvStatus === 2 ? "#f87171" : "#fbbf24"
+    const statusText = cctvStatus === 2 ? "위험 감지" : "무단침입 감지"
+
+    popup.document.open()
+    popup.document.write(`
+      <!doctype html>
+      <html lang="ko">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>SoundGuard CCTV</title>
+          <style>
+            * { box-sizing: border-box; }
+            html, body { width: 100%; height: 100%; margin: 0; background: #020711; color: #deeaff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
+            .wrap { width: 100%; height: 100%; display: flex; flex-direction: column; background: #020711; }
+            .bar { height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 14px; background: rgba(7,14,28,.98); border-bottom: 1px solid #162c44; flex-shrink: 0; }
+            .dot { width: 8px; height: 8px; border-radius: 50%; background: ${accentColor}; box-shadow: 0 0 14px ${accentColor}; }
+            .title { font-size: 13px; font-weight: 900; color: ${accentColor}; }
+            .status { font-size: 11px; color: #7090ae; }
+            .spacer { margin-left: auto; }
+            .control { background: rgba(255,255,255,.05); border: 1px solid #162c44; border-radius: 6px; padding: 6px 10px; color: #deeaff; cursor: pointer; font-size: 11px; font-weight: 800; }
+            .control:hover { border-color: #22d3ee; color: #ffffff; }
+            .viewer { position: relative; width: 100%; height: 100%; min-height: 0; }
+            .fullscreen-control { position: absolute; right: 14px; bottom: 14px; background: rgba(2,7,17,.82); border: 1px solid rgba(34,211,238,.35); border-radius: 7px; padding: 8px 12px; color: #deeaff; cursor: pointer; font-size: 12px; font-weight: 900; }
+            .fullscreen-control:hover { border-color: #22d3ee; color: #ffffff; }
+            .exit-fullscreen { display: none; }
+            :fullscreen .enter-fullscreen { display: none; }
+            :fullscreen .exit-fullscreen { display: block; }
+            video { width: 100%; height: 100%; min-height: 0; object-fit: cover; display: block; background: #000; }
+          </style>
+        </head>
+        <body>
+          <div class="wrap">
+            <div class="bar">
+              <span class="dot"></span>
+              <span class="title">SoundGuard CCTV</span>
+              <span class="status">${statusText}</span>
+              <span class="spacer"></span>
+              <button class="control" onclick="window.close()">닫기</button>
+            </div>
+            <div class="viewer">
+              <video src="${videoUrl}" autoplay muted loop playsinline controls></video>
+              <button class="fullscreen-control enter-fullscreen" onclick="document.documentElement.requestFullscreen && document.documentElement.requestFullscreen()">전체화면</button>
+              <button class="fullscreen-control exit-fullscreen" onclick="document.exitFullscreen && document.exitFullscreen()">원래크기</button>
+            </div>
+          </div>
+        </body>
+      </html>
+    `)
+    popup.document.close()
+    popup.focus()
+
+    cctvWindowRef.current = popup
+    setCctvPopupOpen(true)
+  }
+  const startCctvResize = (event) => {
+    event.preventDefault()
+
+    const panel = mapPanelRef.current
+    if (!panel) return
+
+    const rect = panel.getBoundingClientRect()
+    const originalCursor = document.body.style.cursor
+    const originalUserSelect = document.body.style.userSelect
+
+    const updateWidth = (clientX) => {
+      const nextWidth = ((rect.right - clientX) / rect.width) * 100
+      setCctvWidthPercent(Math.min(65, Math.max(25, nextWidth)))
+    }
+
+    const handlePointerMove = (moveEvent) => {
+      updateWidth(moveEvent.clientX)
+    }
+
+    const stopResize = () => {
+      document.body.style.cursor = originalCursor
+      document.body.style.userSelect = originalUserSelect
+      document.removeEventListener("pointermove", handlePointerMove)
+      document.removeEventListener("pointerup", stopResize)
+      document.removeEventListener("pointercancel", stopResize)
+    }
+
+    document.body.style.cursor = "col-resize"
+    document.body.style.userSelect = "none"
+    updateWidth(event.clientX)
+    document.addEventListener("pointermove", handlePointerMove)
+    document.addEventListener("pointerup", stopResize)
+    document.addEventListener("pointercancel", stopResize)
+  }
 
   const hdrSt = { display:"flex", alignItems:"center", gap:8, padding:"9px 16px", borderBottom:`1px solid ${C.bd}`, background:"rgba(7,14,28,.96)", flexShrink:0, flexWrap:"wrap", rowGap:6 }
   const chipSt = { fontSize:10, color:C.t3, padding:"3px 8px", background:"rgba(255,255,255,.025)", border:`1px solid ${C.bd}`, borderRadius:4, display:"flex", alignItems:"center", gap:4, whiteSpace:"nowrap" }
   const mBtnSt = { background:"none", border:`1px solid ${C.bd}`, borderRadius:5, padding:"4px 9px", color:C.t2, cursor:"pointer", fontSize:10, fontFamily:"inherit", whiteSpace:"nowrap" }
   const cardSt = { background:C.card, border:`1px solid ${C.bd}`, borderRadius:8, overflow:"hidden" }
   const modalOverlay = { position:"absolute", top:0, left:0, right:0, bottom:0, background:"rgba(0,0,0,0.7)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:100, backdropFilter:"blur(2px)" }
+  const mapPanelSt = {
+    ...cardSt,
+    flex:1,
+    display:"grid",
+    gridTemplateColumns:cctvVisible ? `minmax(0,1fr) 10px minmax(260px,${cctvWidthPercent}%)` : "1fr",
+    position:"relative",
+    background:"#0a1424",
+    minHeight:0,
+  }
+  const mapAreaSt = { position:"relative", minWidth:0, minHeight:0, overflow:"hidden" }
+  const resizeHandleSt = {
+    position:"relative",
+    zIndex:4,
+    cursor:"col-resize",
+    background:"linear-gradient(90deg, rgba(22,44,68,.85), rgba(34,211,238,.22), rgba(22,44,68,.85))",
+    borderLeft:`1px solid ${C.bd}`,
+    borderRight:`1px solid ${C.bd}`,
+    display:"flex",
+    alignItems:"center",
+    justifyContent:"center",
+    touchAction:"none",
+  }
+  const resizeGripSt = { width:2, height:44, borderRadius:2, background:"rgba(222,234,255,.45)", boxShadow:"0 0 12px rgba(34,211,238,.35)" }
+  const cctvAreaSt = { position:"relative", minWidth:0, minHeight:0, overflow:"hidden", background:"#020711" }
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100vh", overflow:"hidden", position:"relative" }}>
@@ -873,27 +1044,76 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         <div style={{ display:"flex", flexDirection:"column", padding:12, gap:10, overflow:"hidden" }}>
 
           {/* 지도 시각화 */}
-          <div style={{ ...cardSt, flex:1, position:"relative", background:"#0a1424" }}>
-            <div style={{ position:"absolute", top:12, left:12, background:"rgba(10,20,40,.8)", padding:"5px 10px", borderRadius:6, border:`1px solid ${C.bd}`, fontSize:11, fontWeight:700, color:C.t1, zIndex:2 }}>
-              🗺 현재 음성감지구역 지도
+          <div ref={mapPanelRef} style={mapPanelSt}>
+            <div style={mapAreaSt}>
+              <div style={{ position:"absolute", top:12, left:12, background:"rgba(10,20,40,.8)", padding:"5px 10px", borderRadius:6, border:`1px solid ${C.bd}`, fontSize:11, fontWeight:700, color:C.t1, zIndex:2 }}>
+                🗺 현재 음성감지구역 지도
+              </div>
+
+              <iframe
+                key={mapSrc}
+                title="SoundGuard Map"
+                src={mapSrc}
+                style={{ width:"100%", height:"100%", border:"none", display:"block" }}
+              />
+
+              <div
+                style={{ position:"absolute", bottom:12, left:12, background:"rgba(10,20,40,.9)", padding:"6px 10px", borderRadius:6, border:`1px solid ${C.bd}`, fontSize:10, color:C.t2, cursor:"pointer", transition:"border-color 0.2s", zIndex:2, maxWidth:"calc(100% - 24px)" }}
+                onMouseOver={e => e.currentTarget.style.borderColor = C.cyan}
+                onMouseOut={e => e.currentTarget.style.borderColor = C.bd}
+                onClick={() => setMapInfoModal(true)}
+              >
+                <span style={{color:C.t1, fontWeight:700, marginRight:6}}>좌표</span> {mapCoord}<br/>
+                <span style={{color:C.t1, fontWeight:700, marginRight:6}}>주소</span> {mapAddr}
+              </div>
             </div>
 
-            <iframe
-              key={mapSrc}
-              title="SoundGuard Map"
-              src={mapSrc}
-              style={{ width:"100%", height:"100%", border:"none", display:"block", borderRadius:8 }}
-            />
+            {cctvVisible && (
+              <div
+                role="separator"
+                aria-label="지도와 CCTV 화면 크기 조절"
+                title="드래그해서 화면 크기 조절"
+                onPointerDown={startCctvResize}
+                style={resizeHandleSt}
+              >
+                <div style={resizeGripSt} />
+              </div>
+            )}
 
-            <div
-              style={{ position:"absolute", bottom:12, left:12, background:"rgba(10,20,40,.9)", padding:"6px 10px", borderRadius:6, border:`1px solid ${C.bd}`, fontSize:10, color:C.t2, cursor:"pointer", transition:"border-color 0.2s", zIndex:2 }}
-              onMouseOver={e => e.currentTarget.style.borderColor = C.cyan}
-              onMouseOut={e => e.currentTarget.style.borderColor = C.bd}
-              onClick={() => setMapInfoModal(true)}
-            >
-              <span style={{color:C.t1, fontWeight:700, marginRight:6}}>좌표</span> {mapCoord}<br/>
-              <span style={{color:C.t1, fontWeight:700, marginRight:6}}>주소</span> {mapAddr}
-            </div>
+            {cctvVisible && (
+              <div style={cctvAreaSt}>
+                <video
+                  src={cctvVideoSrc}
+                  autoPlay
+                  muted
+                  loop
+                  playsInline
+                  style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }}
+                />
+                <div style={{ position:"absolute", top:12, left:12, display:"flex", alignItems:"center", gap:7, background:"rgba(2,7,17,.82)", border:`1px solid ${cctvStatus === 2 ? "rgba(248,113,113,.5)" : "rgba(251,191,36,.45)"}`, borderRadius:6, padding:"5px 9px", fontSize:11, fontWeight:800, color:cctvStatus === 2 ? C.red : C.amber }}>
+                  <span style={{ width:7, height:7, borderRadius:"50%", background:cctvStatus === 2 ? C.red : C.amber, boxShadow:`0 0 12px ${cctvStatus === 2 ? C.red : C.amber}` }} />
+                  CCTV
+                </div>
+                <button
+                  type="button"
+                  onClick={openCctvPopup}
+                  style={{ position:"absolute", top:12, right:62, background:"rgba(2,7,17,.86)", border:`1px solid ${C.bd}`, borderRadius:6, padding:"5px 9px", color:C.t1, cursor:"pointer", fontSize:10, fontWeight:800, fontFamily:"inherit" }}
+                >
+                  팝업으로 보기
+                </button>
+                <button
+                  type="button"
+                  onClick={closeCctvView}
+                  style={{ position:"absolute", top:12, right:12, background:"rgba(248,113,113,.12)", border:"1px solid rgba(248,113,113,.35)", borderRadius:6, padding:"5px 9px", color:C.red, cursor:"pointer", fontSize:10, fontWeight:900, fontFamily:"inherit" }}
+                  title="CCTV 분할 화면 닫기"
+                >
+                  닫기
+                </button>
+                <div style={{ position:"absolute", right:12, bottom:12, background:"rgba(2,7,17,.82)", border:`1px solid ${C.bd}`, borderRadius:6, padding:"5px 9px", fontSize:10, color:C.t2 }}>
+                  {cctvStatus === 2 ? "위험 감지 화면" : "무단침입 감지 화면"}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* BEATs */}
