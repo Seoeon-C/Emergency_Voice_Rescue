@@ -323,37 +323,51 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   mapAddrRef.current = mapAddr
 
   const startTime = useRef(nowStr())
+  const API_BASE = `http://${serverIP}`
+  const ZONE_LABELS = ["산", "공사장", "저수지", "강", "논"]
 
   /* 구역 */
-  const [zones, setZones] = useState([
-    { id: genId(), name: "관악산 출입통제 구역", coord: "37.5665° N, 126.9780° E", addr: "관악산 출입통제 구역" },
-    { id: genId(), name: "강변 저수지 위험구역", coord: "37.5665° N, 127.9780° E", addr: "강변 저수지" },
-    { id: genId(), name: "폐공사장 A구역",       coord: "37.0000° N, 127.0000° E", addr: "폐공사장 A구역" },
-  ])
-
+  const [zones, setZones] = useState([])
   const [selectedZoneId, setSelectedZoneId] = useState(null)
   const [newZoneName, setNewZoneName] = useState("")
   const [newZoneCoord, setNewZoneCoord] = useState("37.5665° N, 126.9780° E")
-  const [newZoneAddr, setNewZoneAddr] = useState("")
+  const [newZoneLabel, setNewZoneLabel] = useState("산")
 
   selectedZoneIdRef.current = selectedZoneId
   zonesRef.current = zones
+
+  /* DB에서 구역 목록 로드 */
+  useEffect(() => {
+    fetch(`${API_BASE}/api/zones`)
+      .then(r => r.json())
+      .then(data => {
+        setZones(data)
+        if (data.length > 0 && !selectedZoneId) {
+          const first = data[0]
+          setSelectedZoneId(first.id)
+          onUpdateConfig({ ...configRef.current, zone: first.name })
+          setMapCoord(first.coord || "37.5665° N, 126.9780° E")
+          setMapAddr(first.label || "")
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (!selectedZoneId && zones.length > 0) {
       const firstZone = zones[0]
       setSelectedZoneId(firstZone.id)
       onUpdateConfig({ ...configRef.current, zone: firstZone.name })
-      setMapCoord(firstZone.coord)
-      setMapAddr(firstZone.addr)
+      setMapCoord(firstZone.coord || "37.5665° N, 126.9780° E")
+      setMapAddr(firstZone.label || "")
     }
   }, [selectedZoneId, zones])
 
   const selectZone = (zone) => {
     setSelectedZoneId(zone.id)
     onUpdateConfig({ ...configRef.current, zone: zone.name })
-    setMapCoord(zone.coord)
-    setMapAddr(zone.addr)
+    setMapCoord(zone.coord || "37.5665° N, 126.9780° E")
+    setMapAddr(zone.label || "")
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
@@ -361,28 +375,44 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         zone_id: zone.id,
         zone_name: zone.name,
         coord: zone.coord,
-        addr: zone.addr,
+        addr: zone.label,
       }))
     }
 
-    addLog("sys", "구역 변경", zone.name)
+    addLog("sys", "구역 변경", `${zone.name} (${zone.label || "미분류"})`)
   }
 
   const addZone = () => {
     const name = newZoneName.trim()
     const coord = newZoneCoord.trim()
-    const addr = newZoneAddr.trim() || name
     if (!name) return
 
-    const next = { id: genId(), name, coord, addr }
-    setZones(prev => [...prev, next])
-    selectZone(next)
+    const id = genId()
+    const next = { id, name, coord, label: newZoneLabel }
+
+    fetch(`${API_BASE}/api/zones`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(next),
+    })
+      .then(r => r.json())
+      .then(saved => {
+        setZones(prev => [...prev, saved])
+        selectZone(saved)
+      })
+      .catch(() => {
+        setZones(prev => [...prev, next])
+        selectZone(next)
+      })
+
     setNewZoneName("")
     setNewZoneCoord("37.5665° N, 126.9780° E")
-    setNewZoneAddr("")
+    setNewZoneLabel("산")
   }
 
   const deleteZone = (id) => {
+    fetch(`${API_BASE}/api/zones/${id}`, { method: "DELETE" }).catch(() => {})
+
     const nextZones = zones.filter(z => z.id !== id)
     setZones(nextZones)
 
@@ -394,7 +424,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         setSelectedZoneId(null)
         onUpdateConfig({ ...configRef.current, zone: "" })
         setMapCoord("37.5665° N, 126.9780° E")
-        setMapAddr("관할 구역 주소 미상")
+        setMapAddr("")
       }
     }
   }
@@ -969,6 +999,9 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             <div style={{ fontSize:16, fontWeight:800, marginBottom:16 }}>구역 선택 및 관리</div>
 
             <div style={{ maxHeight:220, overflowY:"auto", marginBottom:16, border:`1px solid ${C.bd}`, borderRadius:6, padding:8 }}>
+              {zones.length === 0 && (
+                <div style={{ padding:"16px", textAlign:"center", color:C.t3, fontSize:11 }}>등록된 구역이 없습니다</div>
+              )}
               {zones.map(zone => (
                 <div
                   key={zone.id}
@@ -977,7 +1010,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                   <div style={{ cursor:"pointer", flex:1 }} onClick={() => { selectZone(zone); setZoneModal(false) }}>
                     <div style={{ fontSize:12, fontWeight:800, color:C.t1 }}>{zone.name}</div>
                     <div style={{ fontSize:9, color:C.t3, marginTop:2 }}>{zone.coord}</div>
-                    <div style={{ fontSize:9, color:C.t2, marginTop:1 }}>{zone.addr}</div>
+                    <div style={{ fontSize:9, color:C.cyan, marginTop:1, fontWeight:700 }}>{zone.label || "미분류"}</div>
                   </div>
                   <button style={{ background:"none", border:"none", color:C.red, cursor:"pointer", fontSize:10 }} onClick={() => deleteZone(zone.id)}>삭제</button>
                 </div>
@@ -987,7 +1020,13 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
               <input style={inputSt} value={newZoneName} onChange={e => setNewZoneName(e.target.value)} placeholder="새 구역명" />
               <input style={inputSt} value={newZoneCoord} onChange={e => setNewZoneCoord(e.target.value)} placeholder="좌표 예: 37.5665° N, 126.9780° E" />
-              <input style={inputSt} value={newZoneAddr} onChange={e => setNewZoneAddr(e.target.value)} placeholder="주소 또는 설명" />
+              <select
+                style={{...inputSt, cursor:"pointer"}}
+                value={newZoneLabel}
+                onChange={e => setNewZoneLabel(e.target.value)}
+              >
+                {ZONE_LABELS.map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
               <button style={{...btnCyanSt, width:"100%"}} onClick={addZone}>추가</button>
             </div>
 
@@ -1006,16 +1045,12 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
               <label style={labelSt}>GPS 좌표</label>
               <input style={inputSt} value={mapCoord} onChange={e=>setMapCoord(e.target.value)} />
             </div>
-            <div style={{ marginBottom:20 }}>
-              <label style={labelSt}>주소</label>
-              <input style={inputSt} value={mapAddr} onChange={e=>setMapAddr(e.target.value)} />
-            </div>
             <div style={{ display:"flex", gap:10 }}>
               <button
                 style={{...btnCyanSt, background:C.bd, color:C.t1}}
                 onClick={() => {
                   if (selectedZoneId) {
-                    setZones(prev => prev.map(z => z.id === selectedZoneId ? { ...z, coord: mapCoord, addr: mapAddr } : z))
+                    setZones(prev => prev.map(z => z.id === selectedZoneId ? { ...z, coord: mapCoord } : z))
                   }
                   setZoneModal(false)
                   setMapInfoModal(false)

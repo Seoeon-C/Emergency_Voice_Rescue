@@ -11,6 +11,7 @@ server.py - Oracle Cloud 서버에서 실행
 """
 
 import sys
+import uuid
 import asyncio
 import json
 import time
@@ -21,8 +22,9 @@ from pathlib import Path
 
 import numpy as np
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 
 # 현재 폴더(backend_on_server) 모듈 참조
 _cur = Path(__file__).resolve().parent
@@ -34,6 +36,7 @@ from environmental_sound import BeatsEnvironmentClassifier, SoundEvent
 from stt import WhisperAPI
 from decision import GPTDecisionEngine, DecisionResult
 from output import EventLoggerAndMessenger
+from db import Zone, get_db, init_db, ZONE_LABELS
 
 # ── FastAPI 앱 ────────────────────────────────────────────────────
 app = FastAPI()
@@ -45,6 +48,43 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+init_db()
+
+
+# ── 구역 CRUD API ─────────────────────────────────────────────────
+@app.get("/api/zones/labels")
+def get_labels():
+    return ZONE_LABELS
+
+
+@app.get("/api/zones")
+def get_zones(db: Session = Depends(get_db)):
+    zones = db.query(Zone).order_by(Zone.created_at).all()
+    return [{"id": z.id, "name": z.name, "label": z.label, "coord": z.coord} for z in zones]
+
+
+@app.post("/api/zones")
+def create_zone(body: dict = Body(...), db: Session = Depends(get_db)):
+    zone = Zone(
+        id=body.get("id") or str(uuid.uuid4()),
+        name=body["name"],
+        label=body.get("label"),
+        coord=body.get("coord"),
+    )
+    db.add(zone)
+    db.commit()
+    return {"id": zone.id, "name": zone.name, "label": zone.label, "coord": zone.coord}
+
+
+@app.delete("/api/zones/{zone_id}")
+def delete_zone(zone_id: str, db: Session = Depends(get_db)):
+    zone = db.query(Zone).filter(Zone.id == zone_id).first()
+    if zone:
+        db.delete(zone)
+        db.commit()
+    return {"ok": True}
+
 
 # ── 공유 AI 모델 (서버 시작 시 1회만 로드) ───────────────────────
 class SharedAI:

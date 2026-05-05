@@ -1,15 +1,18 @@
 import sys
+import uuid
 from pathlib import Path
 from datetime import datetime
 import asyncio
 import time
 from dataclasses import replace
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 
 from config import settings
 from app import SoundGuardApp
+from db import Zone, get_db, init_db, ZONE_LABELS
 
 current_dir = Path(__file__).resolve().parent
 beats_path = str(current_dir / "beats")
@@ -39,6 +42,42 @@ async def broadcast_to_dashboards(payload: dict) -> None:
             dead_clients.append(client)
     for client in dead_clients:
         DASHBOARD_CLIENTS.discard(client)
+
+
+init_db()
+
+
+@app.get("/api/zones/labels")
+def get_labels():
+    return ZONE_LABELS
+
+
+@app.get("/api/zones")
+def get_zones(db: Session = Depends(get_db)):
+    zones = db.query(Zone).order_by(Zone.created_at).all()
+    return [{"id": z.id, "name": z.name, "label": z.label, "coord": z.coord} for z in zones]
+
+
+@app.post("/api/zones")
+def create_zone(body: dict = Body(...), db: Session = Depends(get_db)):
+    zone = Zone(
+        id=body.get("id") or str(uuid.uuid4()),
+        name=body["name"],
+        label=body.get("label"),
+        coord=body.get("coord"),
+    )
+    db.add(zone)
+    db.commit()
+    return {"id": zone.id, "name": zone.name, "label": zone.label, "coord": zone.coord}
+
+
+@app.delete("/api/zones/{zone_id}")
+def delete_zone(zone_id: str, db: Session = Depends(get_db)):
+    zone = db.query(Zone).filter(Zone.id == zone_id).first()
+    if zone:
+        db.delete(zone)
+        db.commit()
+    return {"ok": True}
 
 
 @app.post("/api/zone-alert")
