@@ -1,15 +1,21 @@
 import sys
+import uuid
+import os
+import requests as req_lib
 from pathlib import Path
 from datetime import datetime
 import asyncio
 import time
 from dataclasses import replace
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, Depends, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 
-from config import settings
+from config import settings, BACKEND_DIR
 from app import SoundGuardApp
+from tts_to_mp3.tts import save_edge_tts
+from db import Zone, get_db, init_db, ZONE_LABELS
 
 current_dir = Path(__file__).resolve().parent
 beats_path = str(current_dir / "beats")
@@ -39,6 +45,94 @@ async def broadcast_to_dashboards(payload: dict) -> None:
             dead_clients.append(client)
     for client in dead_clients:
         DASHBOARD_CLIENTS.discard(client)
+
+
+init_db()
+
+
+@app.get("/api/zones/labels")
+def get_labels():
+    return ZONE_LABELS
+
+
+@app.get("/api/zones")
+def get_zones(db: Session = Depends(get_db)):
+    zones = db.query(Zone).order_by(Zone.created_at).all()
+    return [{"id": z.id, "name": z.name, "label": z.label, "coord": z.coord} for z in zones]
+
+
+@app.post("/api/zones")
+def create_zone(body: dict = Body(...), db: Session = Depends(get_db)):
+    zone = Zone(
+        id=body.get("id") or str(uuid.uuid4()),
+        name=body["name"],
+        label=body.get("label"),
+        coord=body.get("coord"),
+    )
+    db.add(zone)
+    db.commit()
+    return {"id": zone.id, "name": zone.name, "label": zone.label, "coord": zone.coord}
+
+
+@app.delete("/api/zones/{zone_id}")
+def delete_zone(zone_id: str, db: Session = Depends(get_db)):
+    zone = db.query(Zone).filter(Zone.id == zone_id).first()
+    if zone:
+        db.delete(zone)
+        db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/geocode")
+def geocode(q: str = Query(...)):
+    key = os.getenv("VWORLD_KEY") or os.getenv("VITE_VWORLD_KEY")
+    if not key:
+        raise HTTPException(status_code=500, detail="VWORLD_KEY가 없습니다.")
+
+    url = "https://map.vworld.kr/search.do"
+    for category in ["poi", "juso", "jibun"]:
+        params = {"category": category, "q": q, "pageUnit": 1,
+                  "output": "json", "pageIndex": 1, "apiKey": key}
+        try:
+            r = req_lib.get(url, params=params, timeout=5)
+            data = r.json()
+            items = data.get("LIST") or data.get("response", {}).get("result", {}).get("items", [])
+            if items:
+                item = items[0]
+                return {
+                    "lat": float(item.get("ypos")),
+                    "lon": float(item.get("xpos")),
+                    "addr": item.get("njuso") or item.get("JUSO") or item.get("juso") or item.get("nameFull") or q,
+                }
+        except Exception:
+            continue
+
+    raise HTTPException(status_code=404, detail="주소/장소를 찾지 못했습니다.")
+
+
+@app.get("/api/reverse-geocode")
+def reverse_geocode(lat: float = Query(...), lon: float = Query(...)):
+    key = os.getenv("VWORLD_KEY") or os.getenv("VITE_VWORLD_KEY")
+    if not key:
+        raise HTTPException(status_code=500, detail="VWORLD_KEY가 없습니다.")
+
+    url = "https://api.vworld.kr/req/address"
+    params = {
+        "service": "address", "request": "getAddress",
+        "crs": "epsg:4326", "point": f"{lon},{lat}",
+        "type": "both", "zipcode": "true", "simple": "false", "apiKey": key,
+    }
+    try:
+        r = req_lib.get(url, params=params, timeout=5)
+        data = r.json()
+        results = data.get("response", {}).get("result", [])
+        if results:
+            addr = results[0].get("text") or results[0].get("structure", {}).get("detail", "")
+            return {"lat": lat, "lon": lon, "addr": addr}
+    except Exception:
+        pass
+
+    return {"lat": lat, "lon": lon, "addr": ""}
 
 
 @app.post("/api/zone-alert")
@@ -92,7 +186,6 @@ DEFAULT_TTS_MESSAGES = {
     "INTRUSION_WARN_1": "출입이 허가되지 않은 위험 구역입니다. 즉시 안전한 곳으로 이동해 주세요.",
     "INTRUSION_WARN_2": "위험 구역에 계속 머무르고 있습니다. 위치 정보가 상황실로 전송되었습니다. 즉시 퇴장해 주세요.",
     "EMERGENCY_GUIDE": "응급 상황이 감지되었습니다. 가능한 경우 안전한 위치로 이동하고 구조 안내를 기다려 주세요.",
-    "EVACUATION_GUIDE": "위험 상황이 감지되었습니다. 즉시 현재 위치에서 벗어나 안전한 곳으로 대피해 주세요.",
 }
 
 EMERGENCY_KEYWORDS = [
@@ -139,8 +232,10 @@ async def websocket_endpoint(websocket: WebSocket):
         "INTRUSION_WARN_1": "",
         "INTRUSION_WARN_2": "",
         "EMERGENCY_GUIDE": "",
-        "EVACUATION_GUIDE": "",
     }
+
+    tts_dir = BACKEND_DIR / "assets/tts"
+    tts_dir.mkdir(parents=True, exist_ok=True)
 
     current_zone = {
         "zone_id": "default",
@@ -182,9 +277,14 @@ async def websocket_endpoint(websocket: WebSocket):
                     "INTRUSION_WARN_1": msg.get("w1", "") or "",
                     "INTRUSION_WARN_2": msg.get("w2", "") or "",
                     "EMERGENCY_GUIDE": msg.get("emg", "") or "",
-                    "EVACUATION_GUIDE": msg.get("emg", "") or "",
                 })
-                print("[DASHBOARD] 안내 멘트 설정 반영 완료")
+                for tts_key, text in custom_tts.items():
+                    if text.strip():
+                        await save_edge_tts(
+                            text.strip(),
+                            str(tts_dir / f"{tts_key}.mp3")
+                        )
+                print("[DASHBOARD] 안내 멘트 설정 반영 및 mp3 생성 완료")
 
             elif msg_type == "zone_select":
                 current_zone = {

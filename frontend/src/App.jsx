@@ -295,6 +295,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const [clock,    setClock]    = useState(nowStr())
   const wsRef = useRef(null)
   const reconnectRef = useRef(null)
+  const geocodeCacheRef = useRef({})
   const mapPanelRef = useRef(null)
   const cctvWindowRef = useRef(null)
   const [cctvWidthPercent, setCctvWidthPercent] = useState(40)
@@ -349,37 +350,52 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   mapAddrRef.current = mapAddr
 
   const startTime = useRef(nowStr())
+  const API_BASE = `http://${serverIP}`
+  const ZONE_LABELS = ["산", "공사장", "저수지", "강", "논"]
 
   /* 구역 */
-  const [zones, setZones] = useState([
-    { id: genId(), name: "관악산 출입통제 구역", coord: "37.5665° N, 126.9780° E", addr: "관악산 출입통제 구역" },
-    { id: genId(), name: "강변 저수지 위험구역", coord: "37.5665° N, 127.9780° E", addr: "강변 저수지" },
-    { id: genId(), name: "폐공사장 A구역",       coord: "37.0000° N, 127.0000° E", addr: "폐공사장 A구역" },
-  ])
-
+  const [zones, setZones] = useState([])
   const [selectedZoneId, setSelectedZoneId] = useState(null)
   const [newZoneName, setNewZoneName] = useState("")
-  const [newZoneCoord, setNewZoneCoord] = useState("37.5665° N, 126.9780° E")
+  const [newZoneCoord, setNewZoneCoord] = useState("")
   const [newZoneAddr, setNewZoneAddr] = useState("")
+  const [newZoneLabel, setNewZoneLabel] = useState("산")
 
   selectedZoneIdRef.current = selectedZoneId
   zonesRef.current = zones
+
+  /* DB에서 구역 목록 로드 */
+  useEffect(() => {
+    fetch(`${API_BASE}/api/zones`)
+      .then(r => r.json())
+      .then(data => {
+        setZones(data)
+        if (data.length > 0 && !selectedZoneId) {
+          const first = data[0]
+          setSelectedZoneId(first.id)
+          onUpdateConfig({ ...configRef.current, zone: first.name })
+          setMapCoord(first.coord || "37.5665° N, 126.9780° E")
+          setMapAddr(first.label || "")
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (!selectedZoneId && zones.length > 0) {
       const firstZone = zones[0]
       setSelectedZoneId(firstZone.id)
       onUpdateConfig({ ...configRef.current, zone: firstZone.name })
-      setMapCoord(firstZone.coord)
-      setMapAddr(firstZone.addr)
+      setMapCoord(firstZone.coord || "37.5665° N, 126.9780° E")
+      setMapAddr(firstZone.label || "")
     }
   }, [selectedZoneId, zones])
 
   const selectZone = (zone) => {
     setSelectedZoneId(zone.id)
     onUpdateConfig({ ...configRef.current, zone: zone.name })
-    setMapCoord(zone.coord)
-    setMapAddr(zone.addr)
+    setMapCoord(zone.coord || "37.5665° N, 126.9780° E")
+    setMapAddr(zone.label || "")
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
@@ -387,28 +403,45 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         zone_id: zone.id,
         zone_name: zone.name,
         coord: zone.coord,
-        addr: zone.addr,
+        addr: zone.label,
       }))
     }
 
-    addLog("sys", "구역 변경", zone.name)
+    addLog("sys", "구역 변경", `${zone.name} (${zone.label || "미분류"})`)
   }
 
   const addZone = () => {
     const name = newZoneName.trim()
     const coord = newZoneCoord.trim()
-    const addr = newZoneAddr.trim() || name
     if (!name) return
 
-    const next = { id: genId(), name, coord, addr }
-    setZones(prev => [...prev, next])
-    selectZone(next)
+    const id = genId()
+    const next = { id, name, coord, label: newZoneLabel }
+
+    fetch(`${API_BASE}/api/zones`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(next),
+    })
+      .then(r => r.json())
+      .then(saved => {
+        setZones(prev => [...prev, saved])
+        selectZone(saved)
+      })
+      .catch(() => {
+        setZones(prev => [...prev, next])
+        selectZone(next)
+      })
+
     setNewZoneName("")
-    setNewZoneCoord("37.5665° N, 126.9780° E")
+    setNewZoneCoord("")
     setNewZoneAddr("")
+    setNewZoneLabel("산")
   }
 
   const deleteZone = (id) => {
+    fetch(`${API_BASE}/api/zones/${id}`, { method: "DELETE" }).catch(() => {})
+
     const nextZones = zones.filter(z => z.id !== id)
     setZones(nextZones)
 
@@ -420,10 +453,30 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         setSelectedZoneId(null)
         onUpdateConfig({ ...configRef.current, zone: "" })
         setMapCoord("37.5665° N, 126.9780° E")
-        setMapAddr("관할 구역 주소 미상")
+        setMapAddr("")
       }
     }
   }
+
+  /* status 변경 시 CCTV 활성화 상태 저장 */
+  useEffect(() => {
+    if (status !== 0) {
+      setCctvLatchedActive(true)
+      setCctvAlertStatus(status)
+    }
+  }, [status])
+
+  /* 새 창이 닫혔는지 0.5초마다 확인 */
+  useEffect(() => {
+    if (!cctvPopupOpen) return
+    const timer = setInterval(() => {
+      if (cctvWindowRef.current && cctvWindowRef.current.closed) {
+        cctvWindowRef.current = null
+        setCctvPopupOpen(false)
+      }
+    }, 500)
+    return () => clearInterval(timer)
+  }, [cctvPopupOpen])
 
   /* 시계 */
   useEffect(() => {
@@ -746,6 +799,222 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     }
   }
 
+  const isCoordinateInput = (input) => {
+    const nums = String(input).match(/-?\d+(\.\d+)?/g)
+    return nums && nums.length >= 2
+  }
+
+  const toCoordText = (lat, lon) =>
+    `${Number(lat).toFixed(6)}° N, ${Number(lon).toFixed(6)}° E`
+
+  const geocodeAddress = async (input) => {
+    const q = String(input || "").trim()
+    if (!q) throw new Error("검색어 없음")
+    if (geocodeCacheRef.current[q]) return geocodeCacheRef.current[q]
+
+    const res = await fetch(`http://${serverIP}/api/geocode?q=${encodeURIComponent(q)}`)
+    if (!res.ok) throw new Error("주소/장소 검색 실패")
+
+    const result = await res.json()
+    if (!Number.isFinite(Number(result.lat)) || !Number.isFinite(Number(result.lon)))
+      throw new Error("좌표 응답 오류")
+
+    const normalized = { lat: Number(result.lat), lon: Number(result.lon), addr: result.addr || q }
+    geocodeCacheRef.current[q] = normalized
+    return normalized
+  }
+
+  const reverseGeocode = async (lat, lon) => {
+    const key = `reverse:${Number(lat).toFixed(6)},${Number(lon).toFixed(6)}`
+    if (geocodeCacheRef.current[key]) return geocodeCacheRef.current[key].addr || ""
+    try {
+      const res = await fetch(
+        `http://${serverIP}/api/reverse-geocode?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`
+      )
+      if (!res.ok) return ""
+      const data = await res.json()
+      const addr = data.addr || data.address || ""
+      geocodeCacheRef.current[key] = { lat: Number(lat), lon: Number(lon), addr }
+      return addr
+    } catch { return "" }
+  }
+
+  const applyLocationInput = async (input) => {
+    const value = String(input || "").trim()
+    if (!value) return
+    try {
+      let lat, lon, addr
+      if (isCoordinateInput(value)) {
+        const nums = value.match(/-?\d+(\.\d+)?/g)
+        lat = Number(nums[0]); lon = Number(nums[1])
+        addr = await reverseGeocode(lat, lon)
+      } else {
+        const result = await geocodeAddress(value)
+        lat = result.lat; lon = result.lon; addr = result.addr
+      }
+      const coordText = toCoordText(lat, lon)
+      setMapCoord(coordText)
+      setMapAddr(addr || "")
+      if (selectedZoneId) {
+        setZones(prev => prev.map(z =>
+          z.id === selectedZoneId ? { ...z, coord: coordText, addr: addr || "" } : z
+        ))
+      }
+    } catch (e) {
+      console.error(e)
+      alert("주소 또는 좌표를 찾지 못했습니다. 도로명 주소나 정확한 좌표를 입력해 주세요.")
+    }
+  }
+
+  const applyCoordInput = async (input) => {
+    const value = String(input || "").trim()
+    if (!value) return
+    if (!isCoordinateInput(value)) {
+      alert("GPS 좌표 칸에는 좌표만 입력해 주세요. 예: 37.5665, 126.9780")
+      return
+    }
+    const nums = value.match(/-?\d+(\.\d+)?/g)
+    const lat = Number(nums[0]); const lon = Number(nums[1])
+    const coordText = toCoordText(lat, lon)
+    const addr = await reverseGeocode(lat, lon)
+    setMapCoord(coordText)
+    if (addr) setMapAddr(addr)
+    if (selectedZoneId) {
+      setZones(prev => prev.map(z =>
+        z.id === selectedZoneId ? { ...z, coord: coordText, addr: addr || z.addr || "" } : z
+      ))
+    }
+  }
+
+  const applyNewZoneLocationInput = async (input) => {
+    const value = String(input || "").trim()
+    if (!value) return
+    try {
+      let lat, lon, addr
+      if (isCoordinateInput(value)) {
+        const nums = value.match(/-?\d+(\.\d+)?/g)
+        lat = Number(nums[0]); lon = Number(nums[1])
+        addr = await reverseGeocode(lat, lon)
+      } else {
+        const result = await geocodeAddress(value)
+        lat = result.lat; lon = result.lon; addr = result.addr
+      }
+      setNewZoneCoord(toCoordText(lat, lon))
+      setNewZoneAddr(addr || "")
+    } catch (e) {
+      console.error(e)
+      alert("새 구역 주소 또는 좌표를 찾지 못했습니다.")
+    }
+  }
+
+  const cctvEventActive = cctvLatchedActive
+  const cctvVisible = cctvEventActive && !cctvPopupOpen
+  const cctvVideoSrc = "/test_video.mp4"
+  const cctvStatus = cctvAlertStatus || 1
+
+  const closeCctvView = () => {
+    setCctvLatchedActive(false)
+    setCctvPopupOpen(false)
+    if (cctvWindowRef.current && !cctvWindowRef.current.closed) {
+      cctvWindowRef.current.close()
+    }
+    cctvWindowRef.current = null
+  }
+
+  const openCctvPopup = () => {
+    const existingWindow = cctvWindowRef.current
+    if (existingWindow && !existingWindow.closed) {
+      existingWindow.focus()
+      setCctvPopupOpen(true)
+      return
+    }
+    const popup = window.open(
+      "",
+      "soundguard-cctv-popup",
+      "popup=yes,width=1120,height=680,left=120,top=80,resizable=yes,scrollbars=no"
+    )
+    if (!popup) {
+      alert("팝업이 차단되었습니다. 브라우저 팝업 허용 후 다시 눌러주세요.")
+      return
+    }
+    const videoUrl = new URL(cctvVideoSrc, window.location.origin).href
+    const accentColor = cctvStatus === 2 ? "#f87171" : "#fbbf24"
+    const statusText = cctvStatus === 2 ? "위험 감지" : "무단침입 감지"
+    popup.document.open()
+    popup.document.write(`
+      <!doctype html><html lang="ko">
+        <head><meta charset="utf-8" /><title>SoundGuard CCTV</title>
+          <style>
+            * { box-sizing: border-box; }
+            html, body { width:100%; height:100%; margin:0; background:#020711; color:#deeaff; font-family:-apple-system,sans-serif; overflow:hidden; }
+            .wrap { width:100%; height:100%; display:flex; flex-direction:column; }
+            .bar { height:44px; display:flex; align-items:center; gap:10px; padding:0 14px; background:rgba(7,14,28,.98); border-bottom:1px solid #162c44; flex-shrink:0; }
+            .dot { width:8px; height:8px; border-radius:50%; background:${accentColor}; box-shadow:0 0 14px ${accentColor}; }
+            .title { font-size:13px; font-weight:900; color:${accentColor}; }
+            .status { font-size:11px; color:#7090ae; }
+            .spacer { margin-left:auto; }
+            .control { background:rgba(255,255,255,.05); border:1px solid #162c44; border-radius:6px; padding:6px 10px; color:#deeaff; cursor:pointer; font-size:11px; font-weight:800; }
+            .control:hover { border-color:#22d3ee; color:#fff; }
+            .viewer { position:relative; width:100%; flex:1; min-height:0; }
+            .fcbtn { position:absolute; right:14px; bottom:14px; background:rgba(2,7,17,.82); border:1px solid rgba(34,211,238,.35); border-radius:7px; padding:8px 12px; color:#deeaff; cursor:pointer; font-size:12px; font-weight:900; }
+            .fcbtn:hover { border-color:#22d3ee; }
+            .exit-fs { display:none; }
+            :fullscreen .enter-fs { display:none; }
+            :fullscreen .exit-fs { display:block; }
+            video { width:100%; height:100%; object-fit:cover; display:block; background:#000; }
+          </style>
+        </head>
+        <body>
+          <div class="wrap">
+            <div class="bar">
+              <span class="dot"></span>
+              <span class="title">SoundGuard CCTV</span>
+              <span class="status">${statusText}</span>
+              <span class="spacer"></span>
+              <button class="control" onclick="window.close()">닫기</button>
+            </div>
+            <div class="viewer">
+              <video src="${videoUrl}" autoplay muted loop playsinline controls></video>
+              <button class="fcbtn enter-fs" onclick="document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen()">전체화면</button>
+              <button class="fcbtn exit-fs" onclick="document.exitFullscreen&&document.exitFullscreen()">원래크기</button>
+            </div>
+          </div>
+        </body>
+      </html>
+    `)
+    popup.document.close()
+    popup.focus()
+    cctvWindowRef.current = popup
+    setCctvPopupOpen(true)
+  }
+
+  const startCctvResize = (event) => {
+    event.preventDefault()
+    const panel = mapPanelRef.current
+    if (!panel) return
+    const rect = panel.getBoundingClientRect()
+    const origCursor = document.body.style.cursor
+    const origSelect = document.body.style.userSelect
+    const updateWidth = (clientX) => {
+      const next = ((rect.right - clientX) / rect.width) * 100
+      setCctvWidthPercent(Math.min(65, Math.max(25, next)))
+    }
+    const onMove = (e) => updateWidth(e.clientX)
+    const onStop = () => {
+      document.body.style.cursor = origCursor
+      document.body.style.userSelect = origSelect
+      document.removeEventListener("pointermove", onMove)
+      document.removeEventListener("pointerup", onStop)
+      document.removeEventListener("pointercancel", onStop)
+    }
+    document.body.style.cursor = "col-resize"
+    document.body.style.userSelect = "none"
+    updateWidth(event.clientX)
+    document.addEventListener("pointermove", onMove)
+    document.addEventListener("pointerup", onStop)
+    document.addEventListener("pointercancel", onStop)
+  }
+
   const sd = STATUS_DATA[status]
 
   const parseCoord = (coord) => {
@@ -763,127 +1032,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     `&addr=${encodeURIComponent(mapAddr || "관할 구역 주소 미상")}` +
     `&status=${status === 2 ? "danger" : status === 1 ? "warning" : "normal"}` +
     `&key=${encodeURIComponent(VWORLD_KEY || "")}`
-  const cctvEventActive = cctvLatchedActive
-  const cctvVisible = cctvEventActive && !cctvPopupOpen
-  const cctvVideoSrc = "/test_video.mp4"
-  const cctvStatus = cctvAlertStatus || 1
-  const closeCctvView = () => {
-    setCctvLatchedActive(false)
-    setCctvPopupOpen(false)
-    if (cctvWindowRef.current && !cctvWindowRef.current.closed) {
-      cctvWindowRef.current.close()
-    }
-    cctvWindowRef.current = null
-  }
-  const openCctvPopup = () => {
-    const existingWindow = cctvWindowRef.current
-    if (existingWindow && !existingWindow.closed) {
-      existingWindow.focus()
-      setCctvPopupOpen(true)
-      return
-    }
-
-    const popup = window.open(
-      "",
-      "soundguard-cctv-popup",
-      "popup=yes,width=1120,height=680,left=120,top=80,resizable=yes,scrollbars=no"
-    )
-
-    if (!popup) {
-      alert("팝업이 차단되었습니다. 브라우저 팝업 허용 후 다시 눌러주세요.")
-      return
-    }
-
-    const videoUrl = new URL(cctvVideoSrc, window.location.origin).href
-    const accentColor = cctvStatus === 2 ? "#f87171" : "#fbbf24"
-    const statusText = cctvStatus === 2 ? "위험 감지" : "무단침입 감지"
-
-    popup.document.open()
-    popup.document.write(`
-      <!doctype html>
-      <html lang="ko">
-        <head>
-          <meta charset="utf-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <title>SoundGuard CCTV</title>
-          <style>
-            * { box-sizing: border-box; }
-            html, body { width: 100%; height: 100%; margin: 0; background: #020711; color: #deeaff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
-            .wrap { width: 100%; height: 100%; display: flex; flex-direction: column; background: #020711; }
-            .bar { height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 14px; background: rgba(7,14,28,.98); border-bottom: 1px solid #162c44; flex-shrink: 0; }
-            .dot { width: 8px; height: 8px; border-radius: 50%; background: ${accentColor}; box-shadow: 0 0 14px ${accentColor}; }
-            .title { font-size: 13px; font-weight: 900; color: ${accentColor}; }
-            .status { font-size: 11px; color: #7090ae; }
-            .spacer { margin-left: auto; }
-            .control { background: rgba(255,255,255,.05); border: 1px solid #162c44; border-radius: 6px; padding: 6px 10px; color: #deeaff; cursor: pointer; font-size: 11px; font-weight: 800; }
-            .control:hover { border-color: #22d3ee; color: #ffffff; }
-            .viewer { position: relative; width: 100%; height: 100%; min-height: 0; }
-            .fullscreen-control { position: absolute; right: 14px; bottom: 14px; background: rgba(2,7,17,.82); border: 1px solid rgba(34,211,238,.35); border-radius: 7px; padding: 8px 12px; color: #deeaff; cursor: pointer; font-size: 12px; font-weight: 900; }
-            .fullscreen-control:hover { border-color: #22d3ee; color: #ffffff; }
-            .exit-fullscreen { display: none; }
-            :fullscreen .enter-fullscreen { display: none; }
-            :fullscreen .exit-fullscreen { display: block; }
-            video { width: 100%; height: 100%; min-height: 0; object-fit: cover; display: block; background: #000; }
-          </style>
-        </head>
-        <body>
-          <div class="wrap">
-            <div class="bar">
-              <span class="dot"></span>
-              <span class="title">SoundGuard CCTV</span>
-              <span class="status">${statusText}</span>
-              <span class="spacer"></span>
-              <button class="control" onclick="window.close()">닫기</button>
-            </div>
-            <div class="viewer">
-              <video src="${videoUrl}" autoplay muted loop playsinline controls></video>
-              <button class="fullscreen-control enter-fullscreen" onclick="document.documentElement.requestFullscreen && document.documentElement.requestFullscreen()">전체화면</button>
-              <button class="fullscreen-control exit-fullscreen" onclick="document.exitFullscreen && document.exitFullscreen()">원래크기</button>
-            </div>
-          </div>
-        </body>
-      </html>
-    `)
-    popup.document.close()
-    popup.focus()
-
-    cctvWindowRef.current = popup
-    setCctvPopupOpen(true)
-  }
-  const startCctvResize = (event) => {
-    event.preventDefault()
-
-    const panel = mapPanelRef.current
-    if (!panel) return
-
-    const rect = panel.getBoundingClientRect()
-    const originalCursor = document.body.style.cursor
-    const originalUserSelect = document.body.style.userSelect
-
-    const updateWidth = (clientX) => {
-      const nextWidth = ((rect.right - clientX) / rect.width) * 100
-      setCctvWidthPercent(Math.min(65, Math.max(25, nextWidth)))
-    }
-
-    const handlePointerMove = (moveEvent) => {
-      updateWidth(moveEvent.clientX)
-    }
-
-    const stopResize = () => {
-      document.body.style.cursor = originalCursor
-      document.body.style.userSelect = originalUserSelect
-      document.removeEventListener("pointermove", handlePointerMove)
-      document.removeEventListener("pointerup", stopResize)
-      document.removeEventListener("pointercancel", stopResize)
-    }
-
-    document.body.style.cursor = "col-resize"
-    document.body.style.userSelect = "none"
-    updateWidth(event.clientX)
-    document.addEventListener("pointermove", handlePointerMove)
-    document.addEventListener("pointerup", stopResize)
-    document.addEventListener("pointercancel", stopResize)
-  }
+  
 
   const hdrSt = { display:"flex", alignItems:"center", gap:8, padding:"9px 16px", borderBottom:`1px solid ${C.bd}`, background:"rgba(7,14,28,.96)", flexShrink:0, flexWrap:"wrap", rowGap:6 }
   const chipSt = { fontSize:10, color:C.t3, padding:"3px 8px", background:"rgba(255,255,255,.025)", border:`1px solid ${C.bd}`, borderRadius:4, display:"flex", alignItems:"center", gap:4, whiteSpace:"nowrap" }
@@ -891,26 +1040,16 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const cardSt = { background:C.card, border:`1px solid ${C.bd}`, borderRadius:8, overflow:"hidden" }
   const modalOverlay = { position:"absolute", top:0, left:0, right:0, bottom:0, background:"rgba(0,0,0,0.7)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:100, backdropFilter:"blur(2px)" }
   const mapPanelSt = {
-    ...cardSt,
-    flex:1,
-    display:"grid",
-    gridTemplateColumns:cctvVisible ? `minmax(0,1fr) 10px minmax(260px,${cctvWidthPercent}%)` : "1fr",
-    position:"relative",
-    background:"#0a1424",
-    minHeight:0,
+    ...cardSt, flex:1, display:"grid",
+    gridTemplateColumns: cctvVisible ? `minmax(0,1fr) 10px minmax(260px,${cctvWidthPercent}%)` : "1fr",
+    position:"relative", background:"#0a1424", minHeight:0,
   }
   const mapAreaSt = { position:"relative", minWidth:0, minHeight:0, overflow:"hidden" }
   const resizeHandleSt = {
-    position:"relative",
-    zIndex:4,
-    cursor:"col-resize",
+    position:"relative", zIndex:4, cursor:"col-resize",
     background:"linear-gradient(90deg, rgba(22,44,68,.85), rgba(34,211,238,.22), rgba(22,44,68,.85))",
-    borderLeft:`1px solid ${C.bd}`,
-    borderRight:`1px solid ${C.bd}`,
-    display:"flex",
-    alignItems:"center",
-    justifyContent:"center",
-    touchAction:"none",
+    borderLeft:`1px solid ${C.bd}`, borderRight:`1px solid ${C.bd}`,
+    display:"flex", alignItems:"center", justifyContent:"center", touchAction:"none",
   }
   const resizeGripSt = { width:2, height:44, borderRadius:2, background:"rgba(222,234,255,.45)", boxShadow:"0 0 12px rgba(34,211,238,.35)" }
   const cctvAreaSt = { position:"relative", minWidth:0, minHeight:0, overflow:"hidden", background:"#020711" }
@@ -1043,20 +1182,20 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         {/* 중앙 패널 */}
         <div style={{ display:"flex", flexDirection:"column", padding:12, gap:10, overflow:"hidden" }}>
 
-          {/* 지도 시각화 */}
+          {/* 지도 + CCTV 분할 시각화 */}
           <div ref={mapPanelRef} style={mapPanelSt}>
+
+            {/* 지도 영역 */}
             <div style={mapAreaSt}>
               <div style={{ position:"absolute", top:12, left:12, background:"rgba(10,20,40,.8)", padding:"5px 10px", borderRadius:6, border:`1px solid ${C.bd}`, fontSize:11, fontWeight:700, color:C.t1, zIndex:2 }}>
                 🗺 현재 음성감지구역 지도
               </div>
-
               <iframe
                 key={mapSrc}
                 title="SoundGuard Map"
                 src={mapSrc}
                 style={{ width:"100%", height:"100%", border:"none", display:"block" }}
               />
-
               <div
                 style={{ position:"absolute", bottom:12, left:12, background:"rgba(10,20,40,.9)", padding:"6px 10px", borderRadius:6, border:`1px solid ${C.bd}`, fontSize:10, color:C.t2, cursor:"pointer", transition:"border-color 0.2s", zIndex:2, maxWidth:"calc(100% - 24px)" }}
                 onMouseOver={e => e.currentTarget.style.borderColor = C.cyan}
@@ -1064,10 +1203,11 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                 onClick={() => setMapInfoModal(true)}
               >
                 <span style={{color:C.t1, fontWeight:700, marginRight:6}}>좌표</span> {mapCoord}<br/>
-                <span style={{color:C.t1, fontWeight:700, marginRight:6}}>주소</span> {mapAddr}
+                <span style={{color:C.t1, fontWeight:700, marginRight:6}}>라벨</span> {mapAddr}
               </div>
             </div>
 
+            {/* 리사이즈 핸들 */}
             {cctvVisible && (
               <div
                 role="separator"
@@ -1080,33 +1220,25 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
               </div>
             )}
 
+            {/* CCTV 영역 */}
             {cctvVisible && (
               <div style={cctvAreaSt}>
                 <video
                   src={cctvVideoSrc}
-                  autoPlay
-                  muted
-                  loop
-                  playsInline
+                  autoPlay muted loop playsInline
                   style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }}
                 />
                 <div style={{ position:"absolute", top:12, left:12, display:"flex", alignItems:"center", gap:7, background:"rgba(2,7,17,.82)", border:`1px solid ${cctvStatus === 2 ? "rgba(248,113,113,.5)" : "rgba(251,191,36,.45)"}`, borderRadius:6, padding:"5px 9px", fontSize:11, fontWeight:800, color:cctvStatus === 2 ? C.red : C.amber }}>
                   <span style={{ width:7, height:7, borderRadius:"50%", background:cctvStatus === 2 ? C.red : C.amber, boxShadow:`0 0 12px ${cctvStatus === 2 ? C.red : C.amber}` }} />
                   CCTV
                 </div>
-                <button
-                  type="button"
-                  onClick={openCctvPopup}
-                  style={{ position:"absolute", top:12, right:62, background:"rgba(2,7,17,.86)", border:`1px solid ${C.bd}`, borderRadius:6, padding:"5px 9px", color:C.t1, cursor:"pointer", fontSize:10, fontWeight:800, fontFamily:"inherit" }}
-                >
+                <button type="button" onClick={openCctvPopup}
+                  style={{ position:"absolute", top:12, right:62, background:"rgba(2,7,17,.86)", border:`1px solid ${C.bd}`, borderRadius:6, padding:"5px 9px", color:C.t1, cursor:"pointer", fontSize:10, fontWeight:800, fontFamily:"inherit" }}>
                   팝업으로 보기
                 </button>
-                <button
-                  type="button"
-                  onClick={closeCctvView}
+                <button type="button" onClick={closeCctvView}
                   style={{ position:"absolute", top:12, right:12, background:"rgba(248,113,113,.12)", border:"1px solid rgba(248,113,113,.35)", borderRadius:6, padding:"5px 9px", color:C.red, cursor:"pointer", fontSize:10, fontWeight:900, fontFamily:"inherit" }}
-                  title="CCTV 분할 화면 닫기"
-                >
+                  title="CCTV 분할 화면 닫기">
                   닫기
                 </button>
                 <div style={{ position:"absolute", right:12, bottom:12, background:"rgba(2,7,17,.82)", border:`1px solid ${C.bd}`, borderRadius:6, padding:"5px 9px", fontSize:10, color:C.t2 }}>
@@ -1189,6 +1321,9 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             <div style={{ fontSize:16, fontWeight:800, marginBottom:16 }}>구역 선택 및 관리</div>
 
             <div style={{ maxHeight:220, overflowY:"auto", marginBottom:16, border:`1px solid ${C.bd}`, borderRadius:6, padding:8 }}>
+              {zones.length === 0 && (
+                <div style={{ padding:"16px", textAlign:"center", color:C.t3, fontSize:11 }}>등록된 구역이 없습니다</div>
+              )}
               {zones.map(zone => (
                 <div
                   key={zone.id}
@@ -1197,7 +1332,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                   <div style={{ cursor:"pointer", flex:1 }} onClick={() => { selectZone(zone); setZoneModal(false) }}>
                     <div style={{ fontSize:12, fontWeight:800, color:C.t1 }}>{zone.name}</div>
                     <div style={{ fontSize:9, color:C.t3, marginTop:2 }}>{zone.coord}</div>
-                    <div style={{ fontSize:9, color:C.t2, marginTop:1 }}>{zone.addr}</div>
+                    <div style={{ fontSize:9, color:C.cyan, marginTop:1, fontWeight:700 }}>{zone.label || "미분류"}</div>
                   </div>
                   <button style={{ background:"none", border:"none", color:C.red, cursor:"pointer", fontSize:10 }} onClick={() => deleteZone(zone.id)}>삭제</button>
                 </div>
@@ -1206,8 +1341,23 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
             <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
               <input style={inputSt} value={newZoneName} onChange={e => setNewZoneName(e.target.value)} placeholder="새 구역명" />
-              <input style={inputSt} value={newZoneCoord} onChange={e => setNewZoneCoord(e.target.value)} placeholder="좌표 예: 37.5665° N, 126.9780° E" />
-              <input style={inputSt} value={newZoneAddr} onChange={e => setNewZoneAddr(e.target.value)} placeholder="주소 또는 설명" />
+              <input
+                style={inputSt}
+                value={newZoneCoord}
+                onChange={e => setNewZoneCoord(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") applyNewZoneLocationInput(e.target.value) }}
+                placeholder="좌표만 입력 예: 37.5665, 126.9780 (Enter로 검색)"
+              />
+              <input
+                style={inputSt}
+                value={newZoneAddr}
+                onChange={e => setNewZoneAddr(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") applyNewZoneLocationInput(e.target.value) }}
+                placeholder="주소 또는 장소명 예: 인하대학교 (Enter로 좌표 자동입력)"
+              />
+              <select style={{...inputSt, cursor:"pointer"}} value={newZoneLabel} onChange={e => setNewZoneLabel(e.target.value)}>
+                {ZONE_LABELS.map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
               <button style={{...btnCyanSt, width:"100%"}} onClick={addZone}>추가</button>
             </div>
 
@@ -1224,11 +1374,23 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             <div style={{ fontSize:16, fontWeight:800, marginBottom:16 }}>지도 위치 설정</div>
             <div style={{ marginBottom:12 }}>
               <label style={labelSt}>GPS 좌표</label>
-              <input style={inputSt} value={mapCoord} onChange={e=>setMapCoord(e.target.value)} />
+              <input
+                style={inputSt}
+                value={mapCoord}
+                onChange={e => setMapCoord(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") applyCoordInput(e.target.value) }}
+                placeholder="좌표만 입력 예: 37.450000, 126.650000 (Enter로 이동)"
+              />
             </div>
             <div style={{ marginBottom:20 }}>
               <label style={labelSt}>주소</label>
-              <input style={inputSt} value={mapAddr} onChange={e=>setMapAddr(e.target.value)} />
+              <input
+                style={inputSt}
+                value={mapAddr}
+                onChange={e => setMapAddr(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") applyLocationInput(e.target.value) }}
+                placeholder="주소 또는 장소명 예: 인하대학교 (Enter로 좌표 자동입력)"
+              />
             </div>
             <div style={{ display:"flex", gap:10 }}>
               <button

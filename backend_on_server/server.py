@@ -11,29 +11,35 @@ server.py - Oracle Cloud 서버에서 실행
 """
 
 import sys
+import uuid
+import os
 import asyncio
 import json
 import time
 import tempfile
+import requests as req_lib
 from datetime import datetime
 from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, Depends, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 
 # 현재 폴더(backend_on_server) 모듈 참조
 _cur = Path(__file__).resolve().parent
 sys.path.insert(0, str(_cur))
 sys.path.insert(0, str(_cur / "BEATs"))
 
-from config import settings
+from config import settings, BACKEND_DIR
 from environmental_sound import BeatsEnvironmentClassifier, SoundEvent
 from stt import WhisperAPI
 from decision import GPTDecisionEngine, DecisionResult
 from output import EventLoggerAndMessenger
+from db import Zone, get_db, init_db, ZONE_LABELS
+from tts_to_mp3.tts import save_edge_tts
 
 # ── FastAPI 앱 ────────────────────────────────────────────────────
 app = FastAPI()
@@ -45,6 +51,95 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+init_db()
+
+
+# ── 구역 CRUD API ─────────────────────────────────────────────────
+@app.get("/api/zones/labels")
+def get_labels():
+    return ZONE_LABELS
+
+
+@app.get("/api/zones")
+def get_zones(db: Session = Depends(get_db)):
+    zones = db.query(Zone).order_by(Zone.created_at).all()
+    return [{"id": z.id, "name": z.name, "label": z.label, "coord": z.coord} for z in zones]
+
+
+@app.post("/api/zones")
+def create_zone(body: dict = Body(...), db: Session = Depends(get_db)):
+    zone = Zone(
+        id=body.get("id") or str(uuid.uuid4()),
+        name=body["name"],
+        label=body.get("label"),
+        coord=body.get("coord"),
+    )
+    db.add(zone)
+    db.commit()
+    return {"id": zone.id, "name": zone.name, "label": zone.label, "coord": zone.coord}
+
+
+@app.delete("/api/zones/{zone_id}")
+def delete_zone(zone_id: str, db: Session = Depends(get_db)):
+    zone = db.query(Zone).filter(Zone.id == zone_id).first()
+    if zone:
+        db.delete(zone)
+        db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/geocode")
+def geocode(q: str = Query(...)):
+    key = os.getenv("VWORLD_KEY") or os.getenv("VITE_VWORLD_KEY")
+    if not key:
+        raise HTTPException(status_code=500, detail="VWORLD_KEY가 없습니다.")
+
+    url = "https://map.vworld.kr/search.do"
+    for category in ["poi", "juso", "jibun"]:
+        params = {"category": category, "q": q, "pageUnit": 1,
+                  "output": "json", "pageIndex": 1, "apiKey": key}
+        try:
+            r = req_lib.get(url, params=params, timeout=5)
+            data = r.json()
+            items = data.get("LIST") or data.get("response", {}).get("result", {}).get("items", [])
+            if items:
+                item = items[0]
+                return {
+                    "lat": float(item.get("ypos")),
+                    "lon": float(item.get("xpos")),
+                    "addr": item.get("njuso") or item.get("JUSO") or item.get("juso") or item.get("nameFull") or q,
+                }
+        except Exception:
+            continue
+
+    raise HTTPException(status_code=404, detail="주소/장소를 찾지 못했습니다.")
+
+
+@app.get("/api/reverse-geocode")
+def reverse_geocode(lat: float = Query(...), lon: float = Query(...)):
+    key = os.getenv("VWORLD_KEY") or os.getenv("VITE_VWORLD_KEY")
+    if not key:
+        raise HTTPException(status_code=500, detail="VWORLD_KEY가 없습니다.")
+
+    url = "https://api.vworld.kr/req/address"
+    params = {
+        "service": "address", "request": "getAddress",
+        "crs": "epsg:4326", "point": f"{lon},{lat}",
+        "type": "both", "zipcode": "true", "simple": "false", "apiKey": key,
+    }
+    try:
+        r = req_lib.get(url, params=params, timeout=5)
+        data = r.json()
+        results = data.get("response", {}).get("result", [])
+        if results:
+            addr = results[0].get("text") or results[0].get("structure", {}).get("detail", "")
+            return {"lat": lat, "lon": lon, "addr": addr}
+    except Exception:
+        pass
+
+    return {"lat": lat, "lon": lon, "addr": ""}
+
 
 # ── 공유 AI 모델 (서버 시작 시 1회만 로드) ───────────────────────
 class SharedAI:
@@ -88,7 +183,6 @@ DEFAULT_TTS_MESSAGES = {
     "INTRUSION_WARN_1": "출입이 허가되지 않은 위험 구역입니다. 즉시 안전한 곳으로 이동해 주세요.",
     "INTRUSION_WARN_2": "위험 구역에 계속 머무르고 있습니다. 위치 정보가 상황실로 전송되었습니다. 즉시 퇴장해 주세요.",
     "EMERGENCY_GUIDE": "응급 상황이 감지되었습니다. 가능한 경우 안전한 위치로 이동하고 구조 안내를 기다려 주세요.",
-    "EVACUATION_GUIDE": "위험 상황이 감지되었습니다. 즉시 현재 위치에서 벗어나 안전한 곳으로 대피해 주세요.",
 }
 
 
@@ -170,6 +264,8 @@ async def dashboard_endpoint(websocket: WebSocket):
     print("✅ [Dashboard] 대시보드 연결됨")
 
     custom_tts: dict[str, str] = {}
+    tts_dir = BACKEND_DIR / "assets/tts"
+    tts_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         async for raw in websocket.iter_json():
@@ -180,8 +276,14 @@ async def dashboard_endpoint(websocket: WebSocket):
                     "INTRUSION_WARN_1": raw.get("w1", "") or "",
                     "INTRUSION_WARN_2": raw.get("w2", "") or "",
                     "EMERGENCY_GUIDE":  raw.get("emg", "") or "",
-                    "EVACUATION_GUIDE": raw.get("emg", "") or "",
                 })
+                for tts_key, text in custom_tts.items():
+                    if text.strip():
+                        await save_edge_tts(
+                            text.strip(),
+                            str(tts_dir / f"{tts_key}.mp3")
+                        )
+                print("[DASHBOARD] 안내 멘트 설정 반영 및 mp3 생성 완료")
 
             elif msg_type == "pause":
                 # 대시보드 일시정지 → 모든 sensor에 전달 (추후 확장)
