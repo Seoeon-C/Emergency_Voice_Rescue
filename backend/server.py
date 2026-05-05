@@ -1,12 +1,14 @@
 import sys
 import uuid
+import os
+import requests as req_lib
 from pathlib import Path
 from datetime import datetime
 import asyncio
 import time
 from dataclasses import replace
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, Depends
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, Depends, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
@@ -78,6 +80,58 @@ def delete_zone(zone_id: str, db: Session = Depends(get_db)):
         db.delete(zone)
         db.commit()
     return {"ok": True}
+
+
+@app.get("/api/geocode")
+def geocode(q: str = Query(...)):
+    key = os.getenv("VWORLD_KEY") or os.getenv("VITE_VWORLD_KEY")
+    if not key:
+        raise HTTPException(status_code=500, detail="VWORLD_KEY가 없습니다.")
+
+    url = "https://map.vworld.kr/search.do"
+    for category in ["poi", "juso", "jibun"]:
+        params = {"category": category, "q": q, "pageUnit": 1,
+                  "output": "json", "pageIndex": 1, "apiKey": key}
+        try:
+            r = req_lib.get(url, params=params, timeout=5)
+            data = r.json()
+            items = data.get("LIST") or data.get("response", {}).get("result", {}).get("items", [])
+            if items:
+                item = items[0]
+                return {
+                    "lat": float(item.get("ypos")),
+                    "lon": float(item.get("xpos")),
+                    "addr": item.get("njuso") or item.get("JUSO") or item.get("juso") or item.get("nameFull") or q,
+                }
+        except Exception:
+            continue
+
+    raise HTTPException(status_code=404, detail="주소/장소를 찾지 못했습니다.")
+
+
+@app.get("/api/reverse-geocode")
+def reverse_geocode(lat: float = Query(...), lon: float = Query(...)):
+    key = os.getenv("VWORLD_KEY") or os.getenv("VITE_VWORLD_KEY")
+    if not key:
+        raise HTTPException(status_code=500, detail="VWORLD_KEY가 없습니다.")
+
+    url = "https://api.vworld.kr/req/address"
+    params = {
+        "service": "address", "request": "getAddress",
+        "crs": "epsg:4326", "point": f"{lon},{lat}",
+        "type": "both", "zipcode": "true", "simple": "false", "apiKey": key,
+    }
+    try:
+        r = req_lib.get(url, params=params, timeout=5)
+        data = r.json()
+        results = data.get("response", {}).get("result", [])
+        if results:
+            addr = results[0].get("text") or results[0].get("structure", {}).get("detail", "")
+            return {"lat": lat, "lon": lon, "addr": addr}
+    except Exception:
+        pass
+
+    return {"lat": lat, "lon": lon, "addr": ""}
 
 
 @app.post("/api/zone-alert")

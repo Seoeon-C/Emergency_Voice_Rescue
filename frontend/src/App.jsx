@@ -295,6 +295,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const [clock,    setClock]    = useState(nowStr())
   const wsRef = useRef(null)
   const reconnectRef = useRef(null)
+  const geocodeCacheRef = useRef({})
   const mapPanelRef = useRef(null)
   const cctvWindowRef = useRef(null)
   const [cctvWidthPercent, setCctvWidthPercent] = useState(40)
@@ -336,7 +337,8 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const [zones, setZones] = useState([])
   const [selectedZoneId, setSelectedZoneId] = useState(null)
   const [newZoneName, setNewZoneName] = useState("")
-  const [newZoneCoord, setNewZoneCoord] = useState("37.5665° N, 126.9780° E")
+  const [newZoneCoord, setNewZoneCoord] = useState("")
+  const [newZoneAddr, setNewZoneAddr] = useState("")
   const [newZoneLabel, setNewZoneLabel] = useState("산")
 
   selectedZoneIdRef.current = selectedZoneId
@@ -412,7 +414,8 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       })
 
     setNewZoneName("")
-    setNewZoneCoord("37.5665° N, 126.9780° E")
+    setNewZoneCoord("")
+    setNewZoneAddr("")
     setNewZoneLabel("산")
   }
 
@@ -773,6 +776,114 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         { label:"로그 시스템", ok:false },
       ])
       addLog("sys", "자가진단 실패", "WebSocket 서버 미연결")
+    }
+  }
+
+  const isCoordinateInput = (input) => {
+    const nums = String(input).match(/-?\d+(\.\d+)?/g)
+    return nums && nums.length >= 2
+  }
+
+  const toCoordText = (lat, lon) =>
+    `${Number(lat).toFixed(6)}° N, ${Number(lon).toFixed(6)}° E`
+
+  const geocodeAddress = async (input) => {
+    const q = String(input || "").trim()
+    if (!q) throw new Error("검색어 없음")
+    if (geocodeCacheRef.current[q]) return geocodeCacheRef.current[q]
+
+    const res = await fetch(`http://${serverIP}/api/geocode?q=${encodeURIComponent(q)}`)
+    if (!res.ok) throw new Error("주소/장소 검색 실패")
+
+    const result = await res.json()
+    if (!Number.isFinite(Number(result.lat)) || !Number.isFinite(Number(result.lon)))
+      throw new Error("좌표 응답 오류")
+
+    const normalized = { lat: Number(result.lat), lon: Number(result.lon), addr: result.addr || q }
+    geocodeCacheRef.current[q] = normalized
+    return normalized
+  }
+
+  const reverseGeocode = async (lat, lon) => {
+    const key = `reverse:${Number(lat).toFixed(6)},${Number(lon).toFixed(6)}`
+    if (geocodeCacheRef.current[key]) return geocodeCacheRef.current[key].addr || ""
+    try {
+      const res = await fetch(
+        `http://${serverIP}/api/reverse-geocode?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`
+      )
+      if (!res.ok) return ""
+      const data = await res.json()
+      const addr = data.addr || data.address || ""
+      geocodeCacheRef.current[key] = { lat: Number(lat), lon: Number(lon), addr }
+      return addr
+    } catch { return "" }
+  }
+
+  const applyLocationInput = async (input) => {
+    const value = String(input || "").trim()
+    if (!value) return
+    try {
+      let lat, lon, addr
+      if (isCoordinateInput(value)) {
+        const nums = value.match(/-?\d+(\.\d+)?/g)
+        lat = Number(nums[0]); lon = Number(nums[1])
+        addr = await reverseGeocode(lat, lon)
+      } else {
+        const result = await geocodeAddress(value)
+        lat = result.lat; lon = result.lon; addr = result.addr
+      }
+      const coordText = toCoordText(lat, lon)
+      setMapCoord(coordText)
+      setMapAddr(addr || "")
+      if (selectedZoneId) {
+        setZones(prev => prev.map(z =>
+          z.id === selectedZoneId ? { ...z, coord: coordText, addr: addr || "" } : z
+        ))
+      }
+    } catch (e) {
+      console.error(e)
+      alert("주소 또는 좌표를 찾지 못했습니다. 도로명 주소나 정확한 좌표를 입력해 주세요.")
+    }
+  }
+
+  const applyCoordInput = async (input) => {
+    const value = String(input || "").trim()
+    if (!value) return
+    if (!isCoordinateInput(value)) {
+      alert("GPS 좌표 칸에는 좌표만 입력해 주세요. 예: 37.5665, 126.9780")
+      return
+    }
+    const nums = value.match(/-?\d+(\.\d+)?/g)
+    const lat = Number(nums[0]); const lon = Number(nums[1])
+    const coordText = toCoordText(lat, lon)
+    const addr = await reverseGeocode(lat, lon)
+    setMapCoord(coordText)
+    if (addr) setMapAddr(addr)
+    if (selectedZoneId) {
+      setZones(prev => prev.map(z =>
+        z.id === selectedZoneId ? { ...z, coord: coordText, addr: addr || z.addr || "" } : z
+      ))
+    }
+  }
+
+  const applyNewZoneLocationInput = async (input) => {
+    const value = String(input || "").trim()
+    if (!value) return
+    try {
+      let lat, lon, addr
+      if (isCoordinateInput(value)) {
+        const nums = value.match(/-?\d+(\.\d+)?/g)
+        lat = Number(nums[0]); lon = Number(nums[1])
+        addr = await reverseGeocode(lat, lon)
+      } else {
+        const result = await geocodeAddress(value)
+        lat = result.lat; lon = result.lon; addr = result.addr
+      }
+      setNewZoneCoord(toCoordText(lat, lon))
+      setNewZoneAddr(addr || "")
+    } catch (e) {
+      console.error(e)
+      alert("새 구역 주소 또는 좌표를 찾지 못했습니다.")
     }
   }
 
@@ -1209,12 +1320,21 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
             <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
               <input style={inputSt} value={newZoneName} onChange={e => setNewZoneName(e.target.value)} placeholder="새 구역명" />
-              <input style={inputSt} value={newZoneCoord} onChange={e => setNewZoneCoord(e.target.value)} placeholder="좌표 예: 37.5665° N, 126.9780° E" />
-              <select
-                style={{...inputSt, cursor:"pointer"}}
-                value={newZoneLabel}
-                onChange={e => setNewZoneLabel(e.target.value)}
-              >
+              <input
+                style={inputSt}
+                value={newZoneCoord}
+                onChange={e => setNewZoneCoord(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") applyNewZoneLocationInput(e.target.value) }}
+                placeholder="좌표만 입력 예: 37.5665, 126.9780 (Enter로 검색)"
+              />
+              <input
+                style={inputSt}
+                value={newZoneAddr}
+                onChange={e => setNewZoneAddr(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") applyNewZoneLocationInput(e.target.value) }}
+                placeholder="주소 또는 장소명 예: 인하대학교 (Enter로 좌표 자동입력)"
+              />
+              <select style={{...inputSt, cursor:"pointer"}} value={newZoneLabel} onChange={e => setNewZoneLabel(e.target.value)}>
                 {ZONE_LABELS.map(l => <option key={l} value={l}>{l}</option>)}
               </select>
               <button style={{...btnCyanSt, width:"100%"}} onClick={addZone}>추가</button>
@@ -1233,14 +1353,30 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             <div style={{ fontSize:16, fontWeight:800, marginBottom:16 }}>지도 위치 설정</div>
             <div style={{ marginBottom:12 }}>
               <label style={labelSt}>GPS 좌표</label>
-              <input style={inputSt} value={mapCoord} onChange={e=>setMapCoord(e.target.value)} />
+              <input
+                style={inputSt}
+                value={mapCoord}
+                onChange={e => setMapCoord(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") applyCoordInput(e.target.value) }}
+                placeholder="좌표만 입력 예: 37.450000, 126.650000 (Enter로 이동)"
+              />
+            </div>
+            <div style={{ marginBottom:20 }}>
+              <label style={labelSt}>주소</label>
+              <input
+                style={inputSt}
+                value={mapAddr}
+                onChange={e => setMapAddr(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") applyLocationInput(e.target.value) }}
+                placeholder="주소 또는 장소명 예: 인하대학교 (Enter로 좌표 자동입력)"
+              />
             </div>
             <div style={{ display:"flex", gap:10 }}>
               <button
                 style={{...btnCyanSt, background:C.bd, color:C.t1}}
                 onClick={() => {
                   if (selectedZoneId) {
-                    setZones(prev => prev.map(z => z.id === selectedZoneId ? { ...z, coord: mapCoord } : z))
+                    setZones(prev => prev.map(z => z.id === selectedZoneId ? { ...z, coord: mapCoord, addr: mapAddr } : z))
                   }
                   setZoneModal(false)
                   setMapInfoModal(false)
