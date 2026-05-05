@@ -24,8 +24,9 @@ from pathlib import Path
 
 import numpy as np
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, Depends, Query, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, Depends, Query, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
 # 현재 폴더(backend_on_server) 모듈 참조
@@ -53,6 +54,17 @@ app.add_middleware(
 )
 
 init_db()
+
+# 핸드폰 센서 앱 관련 설정
+SERVER_PUBLIC_URL = os.getenv("SERVER_PUBLIC_URL", "http://168.107.31.37:8000")
+
+_tts_dir      = BACKEND_DIR / "assets/tts"
+_received_dir = BACKEND_DIR / "received"
+_tts_dir.mkdir(parents=True, exist_ok=True)
+_received_dir.mkdir(parents=True, exist_ok=True)
+
+# 대시보드에서 생성한 안내방송 .mp3 를 핸드폰에서 다운로드 가능하게 노출
+app.mount("/tts", StaticFiles(directory=str(_tts_dir)), name="tts")
 
 
 # ── 구역 CRUD API ─────────────────────────────────────────────────
@@ -186,14 +198,20 @@ DEFAULT_TTS_MESSAGES = {
 }
 
 
+_EMERGENCY_LOCK_SECONDS = 180
+_EMERGENCY_INTERVALS   = (30, 60)  # 응급 재안내: 2차→30초, 3차+→60초
+
 def get_zone_state(zone_id: str) -> dict:
     return ZONE_STATES.setdefault(zone_id or "default", {
         "warn1_issued": False,
         "warn2_issued": False,
         "warn1_time": 0.0,
+        "warn2_time": 0.0,
         "silence_cycles": 0,
         "emergency_until": 0.0,
         "emergency_count": 0,
+        "last_emergency_announce": 0.0,
+        "emergency_announce_count": 0,
     })
 
 
@@ -432,48 +450,87 @@ async def _process_audio(
     zone_state["emergency_count"] = (zone_state.get("emergency_count", 0) + 1) if raw_emergency else 0
     confirmed_emergency = has_emg_keyword or zone_state["emergency_count"] >= 2
 
-    if now < zone_state.get("emergency_until", 0.0) and decision.situation != 2:
-        decision = replace(decision, situation=2, situation_name="위험 감지",
-                           risk_level="high", tts_key="NONE",
-                           reason="응급 상황 감지 후 3분 보호 모드 유지",
-                           send_to_control_room=True)
+    # ── 응급 잠금 처리 (app.py _apply_emergency_lock 동일 로직) ──
+    in_emergency_lock = False
 
-    elif decision.situation == 2 and confirmed_emergency:
-        zone_state["emergency_until"] = now + 180
-        zone_state["warn1_issued"]    = False
-        zone_state["warn2_issued"]    = False
-        zone_state["warn1_time"]      = 0.0
-        zone_state["silence_cycles"]  = 0
-        if decision.tts_key == "NONE":
-            decision = replace(decision, tts_key="EMERGENCY_GUIDE", send_to_control_room=True)
+    if decision.situation == 2 and confirmed_emergency:
+        # 응급 확정 → 잠금 (재)설정 + 즉시 재안내 트리거 (잠금 중이어도 동일)
+        zone_state["emergency_until"]          = now + _EMERGENCY_LOCK_SECONDS
+        zone_state["last_emergency_announce"]  = 0.0  # count==0 → 즉시 재생 트리거
+        zone_state["emergency_announce_count"] = 0
+        zone_state["warn1_issued"]             = False
+        zone_state["silence_cycles"]           = 0
+        in_emergency_lock = True
 
     elif decision.situation == 2 and not confirmed_emergency:
-        decision = replace(decision, situation=1, situation_name="무단침입",
-                           risk_level="medium", tts_key="INTRUSION_WARN_1",
-                           send_to_control_room=True, emergency_candidate=False)
-
-    if decision.situation == 1:
-        zone_state["silence_cycles"] = 0
-        if not zone_state.get("warn1_issued") or (now - zone_state.get("warn1_time", 0.0) > 180):
-            decision = replace(decision, tts_key="INTRUSION_WARN_1",
-                               action="1차 경고 방송 송출")
-            zone_state.update({"warn1_issued": True, "warn2_issued": False, "warn1_time": now})
-        elif zone_state.get("warn1_issued") and not zone_state.get("warn2_issued") and has_voice:
-            decision = replace(decision, tts_key="INTRUSION_WARN_2",
-                               action="2차 경고 방송 송출")
-            zone_state["warn2_issued"] = True
+        if now < zone_state.get("emergency_until", 0.0):
+            in_emergency_lock = True          # 잠금 유지
         else:
-            decision = replace(decision, tts_key="NONE", action="감시 지속", send_to_control_room=False)
+            decision = replace(decision, situation=1, situation_name="무단침입",
+                               risk_level="medium", tts_key="INTRUSION_WARN_1",
+                               send_to_control_room=True, emergency_candidate=False)
 
-    elif decision.situation == 0:
+    elif now < zone_state.get("emergency_until", 0.0):
+        in_emergency_lock = True              # situation≠2인데 잠금 유지 중
+
+    # 잠금 상태: back-off 재안내 타이밍 계산 (app.py _apply_emergency_lock 동일)
+    if in_emergency_lock:
+        elapsed = now - zone_state.get("last_emergency_announce", 0.0)
+        count   = zone_state.get("emergency_announce_count", 0)
+        if count == 0:
+            should_announce = True
+        elif count == 1:
+            should_announce = elapsed >= _EMERGENCY_INTERVALS[0]
+        else:
+            should_announce = elapsed >= _EMERGENCY_INTERVALS[1]
+
+        if should_announce:
+            zone_state["last_emergency_announce"]  = now
+            zone_state["emergency_announce_count"] = count + 1
+            emg_tts = "EMERGENCY_GUIDE"
+        else:
+            emg_tts = "NONE"
+
+        remaining = zone_state["emergency_until"] - now
+        decision = replace(decision, situation=2, situation_name="위험 감지",
+                           risk_level="high", tts_key=emg_tts,
+                           reason=f"응급 잠금 유지 중 (남은 시간 {remaining:.0f}초)",
+                           send_to_control_room=True)
+
+    # ── 침입 경고 상태 관리 ──
+    if not in_emergency_lock:
+        if zone_state.get("warn2_issued"):
+            # 2차 경고 진행 중 → 감지 여부 무관하게 30초마다 반복
+            if now - zone_state.get("warn2_time", 0.0) >= 30:
+                decision = replace(decision, tts_key="INTRUSION_WARN_2", action="2차 경고 반복")
+                zone_state["warn2_time"] = now
+            else:
+                decision = replace(decision, tts_key="NONE", action="감시 지속", send_to_control_room=False)
+        elif decision.situation == 1:
+            if not zone_state.get("warn1_issued"):
+                # 1차 경고
+                decision = replace(decision, tts_key="INTRUSION_WARN_1", action="1차 경고 방송 송출")
+                zone_state["warn1_issued"] = True
+            else:
+                # 1차 이후 감지 → 즉시 2차 경고 (타이머 없음)
+                decision = replace(decision, tts_key="INTRUSION_WARN_2",
+                                   action="2차 경고 방송 송출", send_to_control_room=True)
+                zone_state["warn2_issued"] = True
+                zone_state["warn2_time"] = now
+
+    # ── 정상상황 연속 카운트 (situation 기준) → 6회면 전체 리셋 ──
+    if decision.situation == 2:
+        # 응급 전환 시 침입 경고 상태 초기화
+        zone_state.update({"warn1_issued": False, "warn2_issued": False,
+                           "warn2_time": 0.0, "silence_cycles": 0})
+
+    if decision.situation == 0:
         zone_state["silence_cycles"] = zone_state.get("silence_cycles", 0) + 1
         if zone_state["silence_cycles"] >= 6:
             zone_state.update({"warn1_issued": False, "warn2_issued": False,
-                               "warn1_time": 0.0, "silence_cycles": 0})
-
-    elif decision.situation == 2:
-        zone_state.update({"warn1_issued": False, "warn2_issued": False,
-                           "warn1_time": 0.0, "silence_cycles": 0})
+                               "warn2_time": 0.0, "silence_cycles": 0})
+    else:
+        zone_state["silence_cycles"] = 0
 
     tts_message = DEFAULT_TTS_MESSAGES.get(decision.tts_key, "") if decision.tts_key != "NONE" else ""
 
@@ -509,6 +566,57 @@ async def _process_audio(
         f"({sound_event.confidence:.2f}) | Final={decision.situation_name}"
         f" | TTS={decision.tts_key} | STT={stt_text or '없음'}"
     )
+
+    return decision
+
+
+# ── /upload (핸드폰 센서 앱) ──────────────────────────────────────
+@app.post("/upload")
+async def upload_audio(file: UploadFile = File(...), device_id: str = Form(...)):
+    """
+    핸드폰 센서 앱에서 녹음 WAV 파일을 받아 AI 분석 후 안내방송 .mp3 URL 반환.
+
+    반환값:
+      - announcement_url: 재생할 .mp3 URL (위험 없음이면 빈 문자열 "")
+    """
+    import soundfile as sf
+
+    # WAV 저장
+    content = await file.read()
+    received_path = _received_dir / file.filename
+    received_path.write_bytes(content)
+
+    # WAV → numpy float32 (sensor WebSocket과 동일 포맷으로 변환)
+    audio_np, sample_rate = sf.read(received_path)
+    if audio_np.ndim > 1:
+        audio_np = audio_np[:, 0]
+    audio_np = audio_np.astype(np.float32)
+
+    tmp_path   = Path(tempfile.gettempdir()) / f"upload_{device_id}.wav"
+    sf.write(tmp_path, audio_np, sample_rate)
+
+    zone_info  = {
+        "zone_id":   device_id,
+        "zone_name": f"핸드폰 센서 ({device_id})",
+        "coord": "",
+        "addr":  "",
+    }
+    zone_state = get_zone_state(device_id)
+
+    # AI 분석 + 대시보드 브로드캐스트
+    decision = await _process_audio(
+        audio_np.tobytes(), sample_rate, zone_info, zone_state, tmp_path
+    )
+
+    # tts_key → .mp3 URL
+    announcement_url = ""
+    if decision and decision.tts_key not in ("NONE", None, ""):
+        mp3_path = _tts_dir / f"{decision.tts_key}.mp3"
+        if mp3_path.exists():
+            announcement_url = f"{SERVER_PUBLIC_URL}/tts/{decision.tts_key}.mp3"
+
+    print(f"[UPLOAD] tts_key={decision.tts_key if decision else 'None'} → url={announcement_url or '(없음)'}")
+    return {"status": "success", "announcement_url": announcement_url}
 
 
 if __name__ == "__main__":
