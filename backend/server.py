@@ -12,8 +12,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, Depends, Quer
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
-from config import settings
+from config import settings, BACKEND_DIR
 from app import SoundGuardApp
+from tts_to_mp3.tts import save_edge_tts
 from db import Zone, get_db, init_db, ZONE_LABELS
 
 current_dir = Path(__file__).resolve().parent
@@ -185,7 +186,6 @@ DEFAULT_TTS_MESSAGES = {
     "INTRUSION_WARN_1": "출입이 허가되지 않은 위험 구역입니다. 즉시 안전한 곳으로 이동해 주세요.",
     "INTRUSION_WARN_2": "위험 구역에 계속 머무르고 있습니다. 위치 정보가 상황실로 전송되었습니다. 즉시 퇴장해 주세요.",
     "EMERGENCY_GUIDE": "응급 상황이 감지되었습니다. 가능한 경우 안전한 위치로 이동하고 구조 안내를 기다려 주세요.",
-    "EVACUATION_GUIDE": "위험 상황이 감지되었습니다. 즉시 현재 위치에서 벗어나 안전한 곳으로 대피해 주세요.",
 }
 
 EMERGENCY_KEYWORDS = [
@@ -232,8 +232,10 @@ async def websocket_endpoint(websocket: WebSocket):
         "INTRUSION_WARN_1": "",
         "INTRUSION_WARN_2": "",
         "EMERGENCY_GUIDE": "",
-        "EVACUATION_GUIDE": "",
     }
+
+    tts_dir = BACKEND_DIR / "assets/tts"
+    tts_dir.mkdir(parents=True, exist_ok=True)
 
     current_zone = {
         "zone_id": "default",
@@ -275,9 +277,14 @@ async def websocket_endpoint(websocket: WebSocket):
                     "INTRUSION_WARN_1": msg.get("w1", "") or "",
                     "INTRUSION_WARN_2": msg.get("w2", "") or "",
                     "EMERGENCY_GUIDE": msg.get("emg", "") or "",
-                    "EVACUATION_GUIDE": msg.get("emg", "") or "",
                 })
-                print("[DASHBOARD] 안내 멘트 설정 반영 완료")
+                for tts_key, text in custom_tts.items():
+                    if text.strip():
+                        await save_edge_tts(
+                            text.strip(),
+                            str(tts_dir / f"{tts_key}.mp3")
+                        )
+                print("[DASHBOARD] 안내 멘트 설정 반영 및 mp3 생성 완료")
 
             elif msg_type == "zone_select":
                 current_zone = {

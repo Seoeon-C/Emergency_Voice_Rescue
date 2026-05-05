@@ -6,6 +6,22 @@ import io
 VOICE = "ko-KR-InJoonNeural"
 SPEED = "+20%"
 
+
+async def save_edge_tts(text: str, filename: str) -> None:
+    """텍스트를 mp3 파일로 저장만 하는 함수 (재생 없음)"""
+    try:
+        communicate = edge_tts.Communicate(text, VOICE, rate=SPEED)
+        audio_data = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_data += chunk["data"]
+        with open(filename, "wb") as f:
+            f.write(audio_data)
+        print(f"💾 TTS 파일 생성 완료: {filename}")
+    except Exception as e:
+        print(f"❌ TTS 파일 생성 실패: {e}")
+
+
 async def play_and_save_edge(text, filename):
     """남자 목소리로 1.5배속 재생 및 파일 저장"""
     try:
