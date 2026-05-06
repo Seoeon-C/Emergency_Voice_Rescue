@@ -92,6 +92,18 @@ def create_zone(body: dict = Body(...), db: Session = Depends(get_db)):
     return {"id": zone.id, "name": zone.name, "label": zone.label, "coord": zone.coord}
 
 
+@app.put("/api/zones/{zone_id}")
+def update_zone(zone_id: str, body: dict = Body(...), db: Session = Depends(get_db)):
+    zone = db.query(Zone).filter(Zone.id == zone_id).first()
+    if not zone:
+        raise HTTPException(status_code=404, detail="구역을 찾을 수 없습니다.")
+    if "name"  in body: zone.name  = body["name"]
+    if "label" in body: zone.label = body["label"]
+    if "coord" in body: zone.coord = body["coord"]
+    db.commit()
+    return {"id": zone.id, "name": zone.name, "label": zone.label, "coord": zone.coord}
+
+
 @app.delete("/api/zones/{zone_id}")
 def delete_zone(zone_id: str, db: Session = Depends(get_db)):
     zone = db.query(Zone).filter(Zone.id == zone_id).first()
@@ -200,6 +212,42 @@ DEFAULT_TTS_MESSAGES = {
     "EMERGENCY_GUIDE": "응급 상황이 감지되었습니다. 가능한 경우 안전한 위치로 이동하고 구조 안내를 기다려 주세요.",
 }
 
+# 웹 대시보드에서 설정한 멘트 - 전역으로 관리하여 sensor 처리에도 반영
+CUSTOM_TTS_MESSAGES = {
+    "INTRUSION_WARN_1": "",
+    "INTRUSION_WARN_2": "",
+    "EMERGENCY_GUIDE": "",
+}
+
+_TTS_CONFIG_PATH = BACKEND_DIR / "assets/tts_config.json"
+
+
+def _load_custom_tts():
+    """서버 시작 시 저장된 멘트 설정 복원"""
+    if _TTS_CONFIG_PATH.exists():
+        try:
+            import json as _json
+            data = _json.loads(_TTS_CONFIG_PATH.read_text(encoding="utf-8"))
+            for k in CUSTOM_TTS_MESSAGES:
+                if data.get(k):
+                    CUSTOM_TTS_MESSAGES[k] = data[k]
+            print("[TTS] 저장된 안내 멘트 설정 복원 완료")
+        except Exception:
+            pass
+
+
+def _save_custom_tts():
+    """멘트 설정을 파일에 저장"""
+    import json as _json
+    _TTS_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _TTS_CONFIG_PATH.write_text(
+        _json.dumps(CUSTOM_TTS_MESSAGES, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+
+_load_custom_tts()
+
 
 _EMERGENCY_LOCK_SECONDS = 180
 _EMERGENCY_INTERVALS   = (30, 60)  # 응급 재안내: 2차→30초, 3차+→60초
@@ -225,10 +273,8 @@ def normalize_text(text: str) -> str:
 def make_beats_scores(sound_event, decision) -> dict:
     top_dict = dict(getattr(sound_event, "top_labels", []) or [])
     if top_dict:
-        scores = {
-            k: int(top_dict.get(k, 0) * 100)
-            for k in ("background", "speech", "footsteps", "interaction", "impact_noise")
-        }
+        scores = {k: int(top_dict.get(k, 0) * 100)
+                  for k in ("background", "speech", "footsteps", "interaction", "impact_noise")}
         scores["emergency"] = 0
         return scores
     raw = getattr(sound_event, "raw_label", "")
@@ -290,7 +336,6 @@ async def dashboard_endpoint(websocket: WebSocket):
     DASHBOARD_CLIENTS.add(websocket)
     print("✅ [Dashboard] 대시보드 연결됨")
 
-    custom_tts: dict[str, str] = {}
     tts_dir = BACKEND_DIR / "assets/tts"
     tts_dir.mkdir(parents=True, exist_ok=True)
 
@@ -299,12 +344,12 @@ async def dashboard_endpoint(websocket: WebSocket):
             msg_type = raw.get("type")
 
             if msg_type == "tts_config":
-                custom_tts.update({
-                    "INTRUSION_WARN_1": raw.get("w1", "") or "",
-                    "INTRUSION_WARN_2": raw.get("w2", "") or "",
-                    "EMERGENCY_GUIDE":  raw.get("emg", "") or "",
-                })
-                for tts_key, text in custom_tts.items():
+                for key, env_key in [("INTRUSION_WARN_1","w1"),("INTRUSION_WARN_2","w2"),("EMERGENCY_GUIDE","emg")]:
+                    val = (raw.get(env_key) or "").strip()
+                    if val:  # 빈 값은 기존 설정 유지
+                        CUSTOM_TTS_MESSAGES[key] = val
+                _save_custom_tts()
+                for tts_key, text in CUSTOM_TTS_MESSAGES.items():
                     if text.strip():
                         await save_edge_tts(
                             text.strip(),
@@ -555,7 +600,12 @@ async def _process_audio(
     else:
         zone_state["silence_cycles"] = 0
 
-    tts_message = DEFAULT_TTS_MESSAGES.get(decision.tts_key, "") if decision.tts_key != "NONE" else ""
+    tts_message = ""
+    if decision.tts_key != "NONE":
+        tts_message = (
+            CUSTOM_TTS_MESSAGES.get(decision.tts_key)
+            or DEFAULT_TTS_MESSAGES.get(decision.tts_key, "")
+        )
 
     # ── 대시보드 전송 ──
     beats_scores = make_beats_scores(sound_event, decision)
@@ -571,9 +621,9 @@ async def _process_audio(
         "action":            decision.action,
         "tts_key":           decision.tts_key,
         "tts_message":       tts_message,
-        "emergency_candidate": decision.emergency_candidate,
+        "emergency_candidate":       decision.emergency_candidate,
         "emergency_voice_confirmed": emergency_voice_confirmed,
-        "decision_source":   decision.source,
+        "decision_source":           decision.source,
         "beats_label":       sound_event.label,
         "beats_raw_label":   sound_event.raw_label,
         "beats_confidence":  sound_event.confidence,
@@ -581,7 +631,8 @@ async def _process_audio(
         "peak":              sound_event.peak,
         "stt_text":          stt_text,
         "dwell_seconds":     dwell_seconds,
-        "beats":             beats_scores,
+        "beats":             {**make_beats_scores(sound_event, decision),
+                              "emergency": 100 if decision.situation == 2 and emergency_voice_confirmed else 0},
         "zone_id":           zone_id,
         "zone_name":         zone_name,
         "coord":             zone_info.get("coord", ""),
