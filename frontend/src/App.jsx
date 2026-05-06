@@ -283,15 +283,15 @@ function MentEditOverlay({ config, onUpdateConfig, onClose, wsRef }) {
 ════════════════════════════════════════════════════════════ */
 function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateConfig }) {
   const [status,   setStatus]   = useState(0)
-  const [paused,   setPaused]   = useState(false)
+  const [pausedZones, setPausedZones] = useState({})
   const [detected, setDetected] = useState(false)
   const [elapsed,  setElapsed]  = useState(0)
   const [personEl, setPersonEl] = useState(0)
-  const [beats,    setBeats]    = useState({ background:99, loud_noise:1, intrusion:0, emergency:0, impact_noise:0 })
+  const [beats,    setBeats]    = useState({ background:99, speech:0, footsteps:0, interaction:0, impact_noise:0 })
   const [beatsTs,  setBeatsTs]  = useState("—")
   const [lastSnd,  setLastSnd]  = useState("—")
   const [curMsg,   setCurMsg]   = useState(null)
-  const [logs,     setLogs]     = useState([])
+  const [logsByZone, setLogsByZone] = useState({})
   const [clock,    setClock]    = useState(nowStr())
   const wsRef = useRef(null)
   const reconnectRef = useRef(null)
@@ -337,14 +337,14 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   }, [cctvPopupOpen])
 
   const statusRef  = useRef(status)
-  const pausedRef  = useRef(paused)
+  const pausedRef  = useRef(false)
   const configRef  = useRef(config)
   const adminRef   = useRef(adminId)
   const selectedZoneIdRef = useRef(null)
   const mapCoordRef = useRef(mapCoord)
   const mapAddrRef = useRef(mapAddr)
   const zonesRef = useRef([])
-  statusRef.current = status; pausedRef.current = paused
+  statusRef.current = status
   configRef.current = config; adminRef.current  = adminId
   mapCoordRef.current = mapCoord
   mapAddrRef.current = mapAddr
@@ -356,6 +356,13 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   /* 구역 */
   const [zones, setZones] = useState([])
   const [selectedZoneId, setSelectedZoneId] = useState(null)
+
+  const _zoneKey = selectedZoneId || "default"
+  const paused = !!pausedZones[_zoneKey]
+  const logs   = logsByZone[_zoneKey] || []
+
+  pausedRef.current = paused
+
   const [newZoneName, setNewZoneName] = useState("")
   const [newZoneCoord, setNewZoneCoord] = useState("")
   const [newZoneAddr, setNewZoneAddr] = useState("")
@@ -499,9 +506,13 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     addLog("sys", "시스템 시작", `관리자 ${adminId} 접속 · 모니터링 시작`)
   }, [])
 
-  const addLog = useCallback((type, title, detail) => {
+  const addLog = useCallback((type, title, detail, zoneId) => {
     const t = nowStr()
-    setLogs(p => [{ id:Date.now()+Math.random(), t, type, title, detail }, ...p].slice(0, 100))
+    const zId = zoneId || selectedZoneIdRef.current || "default"
+    setLogsByZone(prev => ({
+      ...prev,
+      [zId]: [{ id:Date.now()+Math.random(), t, type, title, detail }, ...(prev[zId] || [])].slice(0, 100)
+    }))
   }, [])
 
   const sendTtsConfig = useCallback(() => {
@@ -612,7 +623,8 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         }
 
         if (data.type === "pause_state") {
-          setPaused(Boolean(data.paused))
+          const zId = data.zone_id || selectedZoneIdRef.current || "default"
+          setPausedZones(prev => ({ ...prev, [zId]: Boolean(data.paused) }))
           addLog("sys", data.paused ? "감지 일시정지 적용" : "감지 재개 적용", "백엔드 반영 완료")
           return
         }
@@ -628,11 +640,11 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         setStatus(situation)
         setBeatsTs(data.timestamp || nowStr())
         setBeats(data.beats || {
-          background: situation === 0 ? 90 : 5,
-          loud_noise: 0,
-          intrusion: situation === 1 ? 80 : 0,
-          emergency: situation === 2 ? 80 : 0,
-          impact_noise: 0,
+          background:   situation === 0 ? 90 : 5,
+          speech:       0,
+          footsteps:    0,
+          interaction:  0,
+          impact_noise: situation === 2 ? 80 : 0,
         })
 
         const activeZone = zonesRef.current.find(z => z.id === selectedZoneIdRef.current)
@@ -753,11 +765,12 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   }, [zones, sendZonesSync])
 
   const togglePause = () => {
+    const zoneId = selectedZoneIdRef.current || "default"
     const next = !pausedRef.current
-    setPaused(next)
+    setPausedZones(prev => ({ ...prev, [zoneId]: next }))
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "pause", paused: next }))
+      wsRef.current.send(JSON.stringify({ type: "pause", paused: next, zone_id: zoneId }))
       addLog("sys", next ? "감지 일시정지 요청" : "감지 재개 요청", `관리자 ${adminRef.current}`)
     } else {
       addLog("sys", "서버 미연결", "WebSocket 연결 후 다시 시도하세요")
@@ -1159,7 +1172,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           <div style={{ ...cardSt, flex:1, display:"flex", flexDirection:"column", minHeight:400 }}>
             <div style={mcHeadSt}>
               <span style={mctSt}>이벤트 로그</span>
-              <button style={{...tbtnSt, padding:"2px 6px", fontSize:9}} onClick={()=>setLogs([])}>초기화</button>
+              <button style={{...tbtnSt, padding:"2px 6px", fontSize:9}} onClick={()=>setLogsByZone(prev=>({...prev,[_zoneKey]:[]}))}>초기화</button>
             </div>
             <div style={{ flex:1, overflowY:"auto", padding:8 }}>
               {logs.map(log => {
@@ -1254,7 +1267,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
               <span style={mctSt}>⚡ 실시간 음향 분석</span>
             </div>
             <div style={{ display:"flex", gap:10, padding:"10px 12px" }}>
-              {[["배경음", beats.background, C.green], ["큰소음", beats.loud_noise, C.t2], ["침입음", beats.intrusion, C.amber], ["응급음", beats.emergency, C.red], ["충격음", beats.impact_noise, C.violet]].map(([lbl, val, color]) =>(
+              {[["배경음", beats.background, C.green], ["큰소음", beats.speech, C.t2], ["침입음", beats.footsteps, C.amber], ["응급음", beats.interaction, C.red], ["충격음", beats.impact_noise, C.violet]].map(([lbl, val, color]) =>(
                 <div key={lbl} style={{ flex:1, background:"rgba(255,255,255,.03)", borderRadius:6, padding:"8px" }}>
                   <div style={{ fontSize:10, color:C.t2, marginBottom:5 }}>{lbl}</div>
                   <div style={{ display:"flex", alignItems:"center", gap:6 }}>
