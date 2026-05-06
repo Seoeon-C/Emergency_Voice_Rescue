@@ -202,22 +202,26 @@ def normalize_text(text: str) -> str:
 def make_beats_scores(sound_event, decision) -> dict:
     top_dict = dict(getattr(sound_event, "top_labels", []) or [])
     if top_dict:
-        return {
+        scores = {
             "background":   int(top_dict.get("background",   0) * 100),
             "speech":       int(top_dict.get("speech",       0) * 100),
             "footsteps":    int(top_dict.get("footsteps",    0) * 100),
             "interaction":  int(top_dict.get("interaction",  0) * 100),
             "impact_noise": int(top_dict.get("impact_noise", 0) * 100),
         }
+        scores["emergency"] = 0
+        return scores
 
     raw = getattr(sound_event, "raw_label", "")
-    return {
+    scores = {
         "background":   90 if decision.situation == 0 else 5,
         "speech":       80 if raw == "speech"       else 0,
         "footsteps":    80 if raw == "footsteps"    else 0,
         "interaction":  80 if raw == "interaction"  else 0,
         "impact_noise": 80 if raw == "impact_noise" else 0,
     }
+    scores["emergency"] = 0
+    return scores
 
 
 @app.websocket("/ws")
@@ -380,13 +384,19 @@ async def websocket_endpoint(websocket: WebSocket):
             compact_text = normalize_text(stt_text)
             has_emergency_keyword = any(keyword in compact_text for keyword in EMERGENCY_KEYWORDS)
 
-            raw_emergency = raw_label == "emergency" and confidence >= 0.80
-            if raw_emergency:
+            raw_danger_candidate = raw_label == "impact_noise" and confidence >= 0.80
+            if raw_danger_candidate:
                 zone_state["emergency_count"] += 1
             else:
                 zone_state["emergency_count"] = 0
 
-            confirmed_emergency = has_emergency_keyword or zone_state["emergency_count"] >= 2
+            gpt_confirmed_emergency = (
+                decision.situation == 2
+                and decision.emergency_candidate
+                and str(decision.source).startswith("gpt")
+            )
+            emergency_voice_confirmed = has_emergency_keyword or gpt_confirmed_emergency
+            confirmed_emergency = emergency_voice_confirmed or zone_state["emergency_count"] >= 2
 
             # 1) 현재 구역 응급 3분 유지
             if now < zone_state["emergency_until"] and decision.situation != 2:
@@ -425,7 +435,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     situation=1,
                     situation_name="무단침입",
                     risk_level="medium",
-                    reason="응급 후보음이 감지되었지만 확정 조건 미충족. 무단침입 경고로 처리",
+                    reason="위험 후보음이 감지되었지만 응급 확정 조건 미충족. 무단침입 경고로 처리",
                     action="침입 경고 처리",
                     tts_key="INTRUSION_WARN_1",
                     send_to_control_room=True,
@@ -493,6 +503,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 tts_message = custom_tts.get(decision.tts_key) or DEFAULT_TTS_MESSAGES.get(decision.tts_key, "")
 
             beats_scores = make_beats_scores(sound_event, decision)
+            beats_scores["emergency"] = 100 if decision.situation == 2 and emergency_voice_confirmed else 0
 
             payload = {
                 "type": "analysis",
@@ -504,6 +515,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 "action": decision.action,
                 "tts_key": decision.tts_key,
                 "tts_message": tts_message,
+                "emergency_candidate": decision.emergency_candidate,
+                "emergency_voice_confirmed": emergency_voice_confirmed,
+                "decision_source": decision.source,
                 "env_label": decision.situation_name,
                 "beats_label": sound_event.label,
                 "beats_raw_label": sound_event.raw_label,
