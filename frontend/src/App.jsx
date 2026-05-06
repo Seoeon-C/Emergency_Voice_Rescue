@@ -24,6 +24,17 @@ const LOG_COLORS = {
   voice:{ c:C.violet, label:"음성" },
 }
 
+const SOUND_LABEL_TEXT = {
+  background: "배경음",
+  speech: "사람 목소리",
+  footsteps: "발소리",
+  interaction: "문소리",
+  impact_noise: "충격음",
+  emergency: "응급음",
+  low_volume: "작은 소리",
+  empty: "무음",
+}
+
 const DEFAULT_MSGS = {
   w1: "무단 침입이 감지되었습니다. 즉시 퇴거하지 않을 시 관계기관에 신고 조치됩니다.",
   w2: "귀하의 위치 정보가 관계기관에 전송되었습니다. 즉시 이 구역을 이탈하십시오.",
@@ -287,7 +298,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const [detected, setDetected] = useState(false)
   const [elapsed,  setElapsed]  = useState(0)
   const [personEl, setPersonEl] = useState(0)
-  const [beats,    setBeats]    = useState({ background:99, speech:0, footsteps:0, interaction:0, impact_noise:0 })
+  const [beats,    setBeats]    = useState({ background:99, speech:0, footsteps:0, interaction:0, impact_noise:0, emergency:0 })
   const [beatsTs,  setBeatsTs]  = useState("—")
   const [lastSnd,  setLastSnd]  = useState("—")
   const [curMsg,   setCurMsg]   = useState(null)
@@ -424,6 +435,35 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     setNewZoneCoord("")
     setNewZoneAddr("")
     setNewZoneLabel("산")
+  }
+
+  const [editingZoneId, setEditingZoneId] = useState(null)
+  const [editName, setEditName]   = useState("")
+  const [editLabel, setEditLabel] = useState("산")
+  const [editCoord, setEditCoord] = useState("")
+
+  const startEditZone = (zone) => {
+    setEditingZoneId(zone.id)
+    setEditName(zone.name)
+    setEditLabel(zone.label || "산")
+    setEditCoord(zone.coord || "")
+  }
+
+  const saveEditZone = () => {
+    if (!editingZoneId || !editName.trim()) return
+    const updated = { name: editName.trim(), label: editLabel, coord: editCoord.trim() }
+    fetch(`${API_BASE}/api/zones/${editingZoneId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updated),
+    }).catch(() => {})
+    setZones(prev => prev.map(z => z.id === editingZoneId ? { ...z, ...updated } : z))
+    if (selectedZoneId === editingZoneId) {
+      onUpdateConfig({ ...configRef.current, zone: updated.name })
+      setMapCoord(updated.coord || mapCoord)
+      setMapAddr(editLabel)
+    }
+    setEditingZoneId(null)
   }
 
   const deleteZone = (id) => {
@@ -619,18 +659,30 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         const situation = Number(data.situation ?? 0)
         setStatus(situation)
         setBeatsTs(data.timestamp || nowStr())
-        setBeats(data.beats || {
+        const fallbackBeats = {
           background:   situation === 0 ? 90 : 5,
           speech:       0,
           footsteps:    0,
           interaction:  0,
           impact_noise: situation === 2 ? 80 : 0,
+          emergency:    0,
+        }
+        const nextBeats = data.beats || fallbackBeats
+        const emergencyActive = Boolean(
+          data.emergency_voice_confirmed ||
+          (situation === 2 && data.decision_source === "gpt")
+        )
+        setBeats({
+          ...fallbackBeats,
+          ...nextBeats,
+          emergency: Number(nextBeats.emergency ?? (emergencyActive ? 100 : 0)),
         })
 
         const activeZone = zonesRef.current.find(z => z.id === selectedZoneIdRef.current)
         const activeZoneCoord = activeZone?.coord || mapCoordRef.current
         const activeZoneAddr = activeZone?.addr || mapAddrRef.current
-        setLastSnd(data.stt_text?.trim() ? "speech" : (data.beats_raw_label || data.beats_label || "—"))
+        const rawSoundLabel = data.stt_text?.trim() ? "speech" : (data.beats_raw_label || data.beats_label || "—")
+        setLastSnd(SOUND_LABEL_TEXT[rawSoundLabel] || rawSoundLabel)
 
         let eventTitle = data.situation_name || "분석 결과"
         let noticeKind = null
@@ -1246,7 +1298,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
               <span style={mctSt}>⚡ 실시간 음향 분석</span>
             </div>
             <div style={{ display:"flex", gap:10, padding:"10px 12px" }}>
-              {[["배경음", beats.background, C.green], ["큰소음", beats.speech, C.t2], ["침입음", beats.footsteps, C.amber], ["응급음", beats.interaction, C.red], ["충격음", beats.impact_noise, C.violet]].map(([lbl, val, color]) =>(
+              {[["배경음", beats.background, C.green], ["사람 목소리", beats.speech, C.cyan], ["발소리", beats.footsteps, C.amber], ["문소리", beats.interaction, C.violet], ["충격음", beats.impact_noise, C.red], ["응급음", beats.emergency, C.red]].map(([lbl, val, color]) =>(
                 <div key={lbl} style={{ flex:1, background:"rgba(255,255,255,.03)", borderRadius:6, padding:"8px" }}>
                   <div style={{ fontSize:10, color:C.t2, marginBottom:5 }}>{lbl}</div>
                   <div style={{ display:"flex", alignItems:"center", gap:6 }}>
@@ -1317,16 +1369,32 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                 <div style={{ padding:"16px", textAlign:"center", color:C.t3, fontSize:11 }}>등록된 구역이 없습니다</div>
               )}
               {zones.map(zone => (
-                <div
-                  key={zone.id}
-                  style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px", background: zone.id === selectedZoneId ? "rgba(34,211,238,.16)" : "rgba(255,255,255,.03)", marginBottom:4, borderRadius:4, border: zone.id === selectedZoneId ? `1px solid ${C.cyan}` : "1px solid transparent" }}
-                >
-                  <div style={{ cursor:"pointer", flex:1 }} onClick={() => { selectZone(zone); setZoneModal(false) }}>
-                    <div style={{ fontSize:12, fontWeight:800, color:C.t1 }}>{zone.name}</div>
-                    <div style={{ fontSize:9, color:C.t3, marginTop:2 }}>{zone.coord}</div>
-                    <div style={{ fontSize:9, color:C.cyan, marginTop:1, fontWeight:700 }}>{zone.label || "미분류"}</div>
-                  </div>
-                  <button style={{ background:"none", border:"none", color:C.red, cursor:"pointer", fontSize:10 }} onClick={() => deleteZone(zone.id)}>삭제</button>
+                <div key={zone.id} style={{ marginBottom:4 }}>
+                  {editingZoneId === zone.id ? (
+                    <div style={{ background:"rgba(34,211,238,.07)", border:`1px solid ${C.cyan}`, borderRadius:6, padding:10, display:"flex", flexDirection:"column", gap:6 }}>
+                      <input style={{...inputSt, fontSize:11, padding:"6px 10px"}} value={editName} onChange={e=>setEditName(e.target.value)} placeholder="구역명" />
+                      <input style={{...inputSt, fontSize:11, padding:"6px 10px"}} value={editCoord} onChange={e=>setEditCoord(e.target.value)} placeholder="좌표 예: 37.5665, 126.9780" />
+                      <select style={{...inputSt, fontSize:11, padding:"6px 10px", cursor:"pointer"}} value={editLabel} onChange={e=>setEditLabel(e.target.value)}>
+                        {ZONE_LABELS.map(l => <option key={l} value={l}>{l}</option>)}
+                      </select>
+                      <div style={{ display:"flex", gap:6 }}>
+                        <button style={{...btnCyanSt, padding:"6px 12px", fontSize:11, flex:1}} onClick={saveEditZone}>저장</button>
+                        <button style={{...tbtnSt, fontSize:11, border:`1px solid ${C.bd}`, borderRadius:5, padding:"6px 12px"}} onClick={()=>setEditingZoneId(null)}>취소</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px", background: zone.id === selectedZoneId ? "rgba(34,211,238,.16)" : "rgba(255,255,255,.03)", borderRadius:4, border: zone.id === selectedZoneId ? `1px solid ${C.cyan}` : "1px solid transparent" }}>
+                      <div style={{ cursor:"pointer", flex:1 }} onClick={() => { selectZone(zone); setZoneModal(false) }}>
+                        <div style={{ fontSize:12, fontWeight:800, color:C.t1 }}>{zone.name}</div>
+                        <div style={{ fontSize:9, color:C.t3, marginTop:2 }}>{zone.coord}</div>
+                        <div style={{ fontSize:9, color:C.cyan, marginTop:1, fontWeight:700 }}>{zone.label || "미분류"}</div>
+                      </div>
+                      <div style={{ display:"flex", gap:4 }}>
+                        <button style={{ background:"none", border:"none", color:C.t2, cursor:"pointer", fontSize:10 }} onClick={() => startEditZone(zone)}>수정</button>
+                        <button style={{ background:"none", border:"none", color:C.red, cursor:"pointer", fontSize:10 }} onClick={() => deleteZone(zone.id)}>삭제</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
