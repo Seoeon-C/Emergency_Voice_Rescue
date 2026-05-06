@@ -153,6 +153,9 @@ def reverse_geocode(lat: float = Query(...), lon: float = Query(...)):
     return {"lat": lat, "lon": lon, "addr": ""}
 
 
+# 구역별 일시정지 상태 (전역)
+PAUSED_ZONES: set[str] = set()
+
 # ── 공유 AI 모델 (서버 시작 시 1회만 로드) ───────────────────────
 class SharedAI:
     def __init__(self):
@@ -223,13 +226,13 @@ def make_beats_scores(sound_event, decision) -> dict:
     top_dict = dict(getattr(sound_event, "top_labels", []) or [])
     if top_dict:
         return {k: int(top_dict.get(k, 0) * 100)
-                for k in ("background", "loud_noise", "intrusion", "emergency", "impact_noise")}
+                for k in ("background", "speech", "footsteps", "interaction", "impact_noise")}
     raw = getattr(sound_event, "raw_label", "")
     return {
         "background":   90 if decision.situation == 0 else 5,
-        "loud_noise":   80 if raw == "loud_noise" else 0,
-        "intrusion":    80 if decision.situation == 1 else 0,
-        "emergency":    80 if decision.situation == 2 else 0,
+        "speech":       80 if raw == "speech"       else 0,
+        "footsteps":    80 if raw == "footsteps"    else 0,
+        "interaction":  80 if raw == "interaction"  else 0,
         "impact_noise": 80 if raw == "impact_noise" else 0,
     }
 
@@ -304,8 +307,14 @@ async def dashboard_endpoint(websocket: WebSocket):
                 print("[DASHBOARD] 안내 멘트 설정 반영 및 mp3 생성 완료")
 
             elif msg_type == "pause":
-                # 대시보드 일시정지 → 모든 sensor에 전달 (추후 확장)
-                await websocket.send_json({"type": "pause_state", "paused": raw.get("paused", False)})
+                zone_id = raw.get("zone_id") or "default"
+                paused_state = bool(raw.get("paused", False))
+                if paused_state:
+                    PAUSED_ZONES.add(zone_id)
+                else:
+                    PAUSED_ZONES.discard(zone_id)
+                print(f"[DASHBOARD] 구역 {zone_id} 감지 {'일시정지' if paused_state else '재개'}")
+                await broadcast({"type": "pause_state", "paused": paused_state, "zone_id": zone_id})
 
             elif msg_type == "self_check":
                 await websocket.send_json({
@@ -572,14 +581,29 @@ async def _process_audio(
 
 # ── /upload (핸드폰 센서 앱) ──────────────────────────────────────
 @app.post("/upload")
-async def upload_audio(file: UploadFile = File(...), device_id: str = Form(...)):
+async def upload_audio(
+    file: UploadFile = File(...),
+    device_id: str = Form(...),
+    db: Session = Depends(get_db),
+):
     """
     핸드폰 센서 앱에서 녹음 WAV 파일을 받아 AI 분석 후 안내방송 .mp3 URL 반환.
 
+    device_id 형식: "{zone_id}_phone01"
     반환값:
       - announcement_url: 재생할 .mp3 URL (위험 없음이면 빈 문자열 "")
     """
+    if device_id in PAUSED_ZONES:
+        return {"status": "paused", "announcement_url": ""}
+
     import soundfile as sf
+
+    # device_id에서 zone_id 파싱: "{zone_id}_phone01" → zone_id
+    parts = device_id.rsplit('_', 1)
+    zone_id_str = parts[0] if len(parts) == 2 and parts[1].startswith('phone') else device_id
+
+    # DB에서 구역 정보 조회
+    zone_db = db.query(Zone).filter(Zone.id == zone_id_str).first()
 
     # WAV 저장
     content = await file.read()
@@ -592,14 +616,14 @@ async def upload_audio(file: UploadFile = File(...), device_id: str = Form(...))
         audio_np = audio_np[:, 0]
     audio_np = audio_np.astype(np.float32)
 
-    tmp_path   = Path(tempfile.gettempdir()) / f"upload_{device_id}.wav"
+    tmp_path = Path(tempfile.gettempdir()) / f"upload_{device_id}.wav"
     sf.write(tmp_path, audio_np, sample_rate)
 
-    zone_info  = {
+    zone_info = {
         "zone_id":   device_id,
-        "zone_name": f"핸드폰 센서 ({device_id})",
-        "coord": "",
-        "addr":  "",
+        "zone_name": zone_db.name if zone_db else f"핸드폰 센서 ({device_id})",
+        "coord":     zone_db.coord if zone_db else "",
+        "addr":      "",
     }
     zone_state = get_zone_state(device_id)
 
@@ -615,7 +639,7 @@ async def upload_audio(file: UploadFile = File(...), device_id: str = Form(...))
         if mp3_path.exists():
             announcement_url = f"{SERVER_PUBLIC_URL}/tts/{decision.tts_key}.mp3"
 
-    print(f"[UPLOAD] tts_key={decision.tts_key if decision else 'None'} → url={announcement_url or '(없음)'}")
+    print(f"[UPLOAD] zone={zone_info['zone_name']} tts_key={decision.tts_key if decision else 'None'} → url={announcement_url or '(없음)'}")
     return {"status": "success", "announcement_url": announcement_url}
 
 

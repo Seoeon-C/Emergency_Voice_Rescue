@@ -203,20 +203,19 @@ def make_beats_scores(sound_event, decision) -> dict:
     top_dict = dict(getattr(sound_event, "top_labels", []) or [])
     if top_dict:
         return {
-            "background": int(top_dict.get("background", 0) * 100),
-            "loud_noise": int(top_dict.get("loud_noise", 0) * 100),
-            "intrusion": int(top_dict.get("intrusion", 0) * 100),
-            "emergency": int(top_dict.get("emergency", 0) * 100),
+            "background":   int(top_dict.get("background",   0) * 100),
+            "speech":       int(top_dict.get("speech",       0) * 100),
+            "footsteps":    int(top_dict.get("footsteps",    0) * 100),
+            "interaction":  int(top_dict.get("interaction",  0) * 100),
             "impact_noise": int(top_dict.get("impact_noise", 0) * 100),
         }
 
     raw = getattr(sound_event, "raw_label", "")
-    situation = getattr(sound_event, "situation", 0)
     return {
-        "background": 90 if decision.situation == 0 else 5,
-        "loud_noise": 80 if raw == "loud_noise" else 0,
-        "intrusion": 80 if situation == 1 or decision.situation == 1 else 0,
-        "emergency": 80 if raw == "emergency" or decision.situation == 2 else 0,
+        "background":   90 if decision.situation == 0 else 5,
+        "speech":       80 if raw == "speech"       else 0,
+        "footsteps":    80 if raw == "footsteps"    else 0,
+        "interaction":  80 if raw == "interaction"  else 0,
         "impact_noise": 80 if raw == "impact_noise" else 0,
     }
 
@@ -227,7 +226,7 @@ async def websocket_endpoint(websocket: WebSocket):
     DASHBOARD_CLIENTS.add(websocket)
     print("✅ [Server] 대시보드 연결 수락됨")
 
-    paused = False
+    paused_zones: dict[str, bool] = {}
     custom_tts = {
         "INTRUSION_WARN_1": "",
         "INTRUSION_WARN_2": "",
@@ -258,7 +257,7 @@ async def websocket_endpoint(websocket: WebSocket):
         })
 
     async def read_dashboard_commands():
-        nonlocal paused, custom_tts, current_zone, known_zones
+        nonlocal custom_tts, current_zone, known_zones
         while True:
             try:
                 msg = await asyncio.wait_for(websocket.receive_json(), timeout=0.01)
@@ -268,9 +267,11 @@ async def websocket_endpoint(websocket: WebSocket):
             msg_type = msg.get("type")
 
             if msg_type == "pause":
-                paused = bool(msg.get("paused", False))
-                print(f"[DASHBOARD] 감지 {'일시정지' if paused else '재개'}")
-                await websocket.send_json({"type": "pause_state", "paused": paused})
+                zone_id = msg.get("zone_id") or current_zone.get("zone_id") or "default"
+                paused_state = bool(msg.get("paused", False))
+                paused_zones[zone_id] = paused_state
+                print(f"[DASHBOARD] 구역 {zone_id} 감지 {'일시정지' if paused_state else '재개'}")
+                await websocket.send_json({"type": "pause_state", "paused": paused_state, "zone_id": zone_id})
 
             elif msg_type == "tts_config":
                 custom_tts.update({
@@ -330,7 +331,8 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             await read_dashboard_commands()
 
-            if paused:
+            zone_id = current_zone.get("zone_id") or "default"
+            if paused_zones.get(zone_id, False):
                 await websocket.send_json({"type": "status", "message": "paused"})
                 await asyncio.sleep(0.2)
                 continue
@@ -342,7 +344,7 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_path = guard_app._save_audio(audio)
 
             await read_dashboard_commands()
-            if paused:
+            if paused_zones.get(zone_id, False):
                 print("[DASHBOARD] 녹음 직후 일시정지 요청 확인. 이번 입력은 처리하지 않습니다.")
                 continue
 

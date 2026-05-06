@@ -28,15 +28,20 @@ RESULT_LABELS = {
 }
 
 
-PROJECT_TASK_LABELS = ["background", "intrusion", "emergency", "impact_noise", "loud_noise"]
-
+PROJECT_TASK_LABELS = [
+    "background",
+    "speech",
+    "footsteps",
+    "interaction",
+    "impact_noise",
+]
 
 PROJECT_LABEL_TO_RESULT = {
-    "background": (0, RESULT_LABELS[0]),
-    "loud_noise": (0, RESULT_LABELS[0]),
-    "intrusion": (1, RESULT_LABELS[1]),
-    "emergency": (2, RESULT_LABELS[2]),
-    "impact_noise": (2, RESULT_LABELS[2]),
+    "background":  (0, RESULT_LABELS[0]),
+    "speech":      (1, RESULT_LABELS[1]),
+    "footsteps":   (1, RESULT_LABELS[1]),
+    "interaction": (1, RESULT_LABELS[1]),
+    "impact_noise":(2, RESULT_LABELS[2]),
 }
 
 
