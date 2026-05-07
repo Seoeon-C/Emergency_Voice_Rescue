@@ -263,6 +263,7 @@ def get_zone_state(zone_id: str) -> dict:
         "emergency_count": 0,
         "last_emergency_announce": 0.0,
         "emergency_announce_count": 0,
+        "created_at": time.time(),
     })
 
 
@@ -407,6 +408,31 @@ async def sensor_endpoint(websocket: WebSocket):
         meta = json.loads(first)
         if meta.get("type") == "zone_info":
             zone_info.update({k: meta[k] for k in meta if k != "type"})
+
+            # DB에서 zone_name으로 구역 조회 → 없으면 자동 생성
+            db = next(get_db())
+            try:
+                db_zone = db.query(Zone).filter(Zone.name == zone_info["zone_name"]).first()
+                if db_zone:
+                    zone_info["zone_id"] = db_zone.id
+                    print(f"[Sensor] DB 구역 매핑: {zone_info['zone_name']} → {db_zone.id}")
+                else:
+                    new_zone = Zone(
+                        id=str(uuid.uuid4()),
+                        name=zone_info["zone_name"],
+                        coord=zone_info.get("coord", ""),
+                    )
+                    db.add(new_zone)
+                    db.commit()
+                    db.refresh(new_zone)
+                    zone_info["zone_id"] = new_zone.id
+                    print(f"[Sensor] DB 구역 자동 생성: {zone_info['zone_name']} → {new_zone.id}")
+            finally:
+                db.close()
+
+            # 최초 zone 상태 강제 초기화
+            get_zone_state(zone_info["zone_id"])
+            print(f"[ZONE INIT] {zone_info['zone_id']} 상태 초기화 완료")
             print(
                 f"[Sensor] 구역 등록: {zone_info['zone_name']} ({zone_info['zone_id']}) "
                 f"| {zone_info['sample_rate']}Hz / {zone_info['chunk_seconds']}s"
@@ -465,8 +491,11 @@ async def _process_audio(
     # 임시 wav 저장 (STT용)
     sf.write(tmp_path, audio, sample_rate)
 
+    _t0 = time.time()
+
     # ── BEATs 분류 ──
     sound_event = ai.env_classifier.classify(audio, sample_rate)
+    _t_beats = time.time()
 
     # ── Whisper STT ──
     stt_text = ""
@@ -481,6 +510,7 @@ async def _process_audio(
                 stt_text = ai.stt.transcribe(tmp_path) or ""
         except Exception as exc:
             print(f"[STT] 실패: {exc}")
+    _t_stt = time.time()
 
     # ── DwellTracker ──
     if sound_event.situation in {1, 2}:
@@ -497,6 +527,14 @@ async def _process_audio(
         stt_text=stt_text,
         dwell_seconds=dwell_seconds,
         authorized=False,
+    )
+    _t_gpt = time.time()
+
+    print(
+        f"⏱ [{zone_name}] BEATs={_t_beats-_t0:.2f}s"
+        f" | STT={_t_stt-_t_beats:.2f}s ({'실행' if stt_trigger else '생략'})"
+        f" | GPT={_t_gpt-_t_stt:.2f}s"
+        f" | 합계={_t_gpt-_t0:.2f}s"
     )
 
     # ── 구역별 경고/응급 상태 관리 ──

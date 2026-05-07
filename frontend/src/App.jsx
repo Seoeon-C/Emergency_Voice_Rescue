@@ -347,10 +347,32 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   /* 구역 */
   const [zones, setZones] = useState([])
   const [selectedZoneId, setSelectedZoneId] = useState(null)
+  const [selectedDeviceKey, setSelectedDeviceKey] = useState(null)
+  const [deviceModalOpen, setDeviceModalOpen] = useState(false)
+  const selectedDeviceKeyRef = useRef(null)
+  selectedDeviceKeyRef.current = selectedDeviceKey
 
   const _zoneKey = selectedZoneId || "default"
   const paused = !!pausedZones[_zoneKey]
-  const logs   = logsByZone[_zoneKey] || []
+
+  const devicesForZone = Object.keys(logsByZone)
+    .filter(k => k === _zoneKey || k.startsWith(_zoneKey + "_"))
+  const activeDeviceKey = selectedDeviceKey && devicesForZone.includes(selectedDeviceKey)
+    ? selectedDeviceKey
+    : devicesForZone[0] || null
+  const activeDeviceName = activeDeviceKey
+    ? (activeDeviceKey.startsWith(_zoneKey + "_") ? activeDeviceKey.slice(_zoneKey.length + 1) : activeDeviceKey)
+    : "없음"
+
+  const logs = Object.entries(logsByZone)
+    .filter(([k]) => {
+      const target = selectedDeviceKey && devicesForZone.includes(selectedDeviceKey) ? selectedDeviceKey : null
+      if (target) return k === target
+      return k === _zoneKey || k.startsWith(_zoneKey + "_")
+    })
+    .flatMap(([, v]) => v)
+    .sort((a, b) => b.id - a.id)
+    .slice(0, 100)
 
   pausedRef.current = paused
 
@@ -391,6 +413,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
   const selectZone = (zone) => {
     setSelectedZoneId(zone.id)
+    setSelectedDeviceKey(null)
     onUpdateConfig({ ...configRef.current, zone: zone.name })
     setMapCoord(zone.coord || "37.5665° N, 126.9780° E")
     setMapAddr(zone.label || "")
@@ -657,32 +680,40 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         if (data.type && data.type !== "analysis") return
 
         const situation = Number(data.situation ?? 0)
-        setStatus(situation)
-        setBeatsTs(data.timestamp || nowStr())
-        const fallbackBeats = {
-          background:   situation === 0 ? 90 : 5,
-          speech:       0,
-          footsteps:    0,
-          interaction:  0,
-          impact_noise: situation === 2 ? 80 : 0,
-          emergency:    0,
+
+        const zonePrefix = (selectedZoneIdRef.current || '') + '_'
+        const isCurrentZone = data.zone_id === selectedZoneIdRef.current || data.zone_id?.startsWith(zonePrefix)
+        const isTargetDevice = selectedDeviceKeyRef.current
+          ? data.zone_id === selectedDeviceKeyRef.current
+          : isCurrentZone
+        if (isTargetDevice) {
+          setStatus(situation)
+          setBeatsTs(data.timestamp || nowStr())
+          const fallbackBeats = {
+            background:   situation === 0 ? 90 : 5,
+            speech:       0,
+            footsteps:    0,
+            interaction:  0,
+            impact_noise: situation === 2 ? 80 : 0,
+            emergency:    0,
+          }
+          const nextBeats = data.beats || fallbackBeats
+          const emergencyActive = Boolean(
+            data.emergency_voice_confirmed ||
+            (situation === 2 && data.decision_source === "gpt")
+          )
+          setBeats({
+            ...fallbackBeats,
+            ...nextBeats,
+            emergency: Number(nextBeats.emergency ?? (emergencyActive ? 100 : 0)),
+          })
+          const rawSoundLabel = data.stt_text?.trim() ? "speech" : (data.beats_raw_label || data.beats_label || "—")
+          setLastSnd(SOUND_LABEL_TEXT[rawSoundLabel] || rawSoundLabel)
         }
-        const nextBeats = data.beats || fallbackBeats
-        const emergencyActive = Boolean(
-          data.emergency_voice_confirmed ||
-          (situation === 2 && data.decision_source === "gpt")
-        )
-        setBeats({
-          ...fallbackBeats,
-          ...nextBeats,
-          emergency: Number(nextBeats.emergency ?? (emergencyActive ? 100 : 0)),
-        })
 
         const activeZone = zonesRef.current.find(z => z.id === selectedZoneIdRef.current)
         const activeZoneCoord = activeZone?.coord || mapCoordRef.current
         const activeZoneAddr = activeZone?.addr || mapAddrRef.current
-        const rawSoundLabel = data.stt_text?.trim() ? "speech" : (data.beats_raw_label || data.beats_label || "—")
-        setLastSnd(SOUND_LABEL_TEXT[rawSoundLabel] || rawSoundLabel)
 
         let eventTitle = data.situation_name || "분석 결과"
         let noticeKind = null
@@ -713,11 +744,12 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           eventTitle,
           data.stt_text?.trim()
             ? `음성 감지: "${data.stt_text.trim()}"`
-            : data.reason || ""
+            : data.reason || "",
+          data.zone_id
         )
 
         if (data.stt_text && data.stt_text.trim()) {
-          addLog("voice", "음성 인식 결과", `"${data.stt_text.trim()}"`)
+          addLog("voice", "음성 인식 결과", `"${data.stt_text.trim()}"`, data.zone_id)
         }
 
         const currentMonitoringZoneId = selectedZoneIdRef.current
@@ -766,7 +798,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         const msg = data.tts_message || ""
         if (msg && type) {
           setCurMsg({ text: msg, type })
-          addLog(type === "응급 안내 방송" ? "emg" : "warn", `${type} 송출`, msg)
+          addLog(type === "응급 안내 방송" ? "emg" : "warn", `${type} 송출`, msg, data.zone_id)
         } else {
           setCurMsg(null)
         }
@@ -1159,13 +1191,17 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           <div style={{ ...cardSt, flexShrink:0 }}>
             <div style={mcHeadSt}><span style={mctSt}>📍 구역 정보</span></div>
             <div style={{ display:"flex", flexDirection:"column" }}>
-              {[["구역명", currentZoneName||"—"], ["감지 장치", "마이크 #1"], ["모니터링 시작", startTime.current]].map(([l,v])=>(
+              {[
+                ["구역명", currentZoneName||"—", () => setZoneModal(true)],
+                ["감지 장치", activeDeviceName, () => setDeviceModalOpen(true)],
+                ["모니터링 시작", startTime.current, null],
+              ].map(([l, v, handler]) => (
                 <div
                   key={l}
-                  style={{ padding:"10px 12px", borderBottom:`1px solid ${C.bd}`, cursor: l==="구역명" ? "pointer" : "default", transition:"background-color 0.2s" }}
-                  onMouseOver={e => { if(l==="구역명") { e.currentTarget.style.backgroundColor="rgba(34,211,238,.15)"; e.currentTarget.children[1].style.color=C.cyan } }}
-                  onMouseOut={e => { if(l==="구역명") { e.currentTarget.style.backgroundColor="transparent"; e.currentTarget.children[1].style.color=C.t1 } }}
-                  onClick={() => { if(l==="구역명") setZoneModal(true) }}
+                  style={{ padding:"10px 12px", borderBottom:`1px solid ${C.bd}`, cursor: handler ? "pointer" : "default", transition:"background-color 0.2s" }}
+                  onMouseOver={e => { if(handler) { e.currentTarget.style.backgroundColor="rgba(34,211,238,.15)"; e.currentTarget.children[1].style.color=C.cyan } }}
+                  onMouseOut={e => { if(handler) { e.currentTarget.style.backgroundColor="transparent"; e.currentTarget.children[1].style.color=C.t1 } }}
+                  onClick={() => handler && handler()}
                 >
                   <div style={{ fontSize:8, textTransform:"uppercase", letterSpacing:".12em", color:C.t3, marginBottom:4, fontWeight:700 }}>{l}</div>
                   <div style={{ fontSize:12, fontWeight:700, transition:"color 0.2s" }}>{v}</div>
@@ -1466,6 +1502,35 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                 확인
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 기기 선택 모달 ── */}
+      {deviceModalOpen && (
+        <div style={modalOverlay}>
+          <div style={{ background:C.card, padding:24, borderRadius:12, border:`1px solid ${C.bd2}`, width:340 }}>
+            <div style={{ fontSize:16, fontWeight:800, marginBottom:16 }}>감지 장치 선택</div>
+            <div style={{ maxHeight:220, overflowY:"auto", marginBottom:16, border:`1px solid ${C.bd}`, borderRadius:6, padding:8 }}>
+              {devicesForZone.length === 0 ? (
+                <div style={{ padding:"16px", textAlign:"center", color:C.t3, fontSize:11 }}>연결된 장치가 없습니다</div>
+              ) : (
+                devicesForZone.map(dk => {
+                  const dname = dk.startsWith(_zoneKey + "_") ? dk.slice(_zoneKey.length + 1) : dk
+                  const isActive = (selectedDeviceKey || devicesForZone[0]) === dk
+                  return (
+                    <div
+                      key={dk}
+                      style={{ padding:"10px 12px", borderRadius:6, marginBottom:4, cursor:"pointer", background: isActive ? "rgba(34,211,238,.12)" : "transparent", border:`1px solid ${isActive ? C.cyan : "transparent"}` }}
+                      onClick={() => { setSelectedDeviceKey(dk); setDeviceModalOpen(false) }}
+                    >
+                      <div style={{ fontSize:13, fontWeight:700, color: isActive ? C.cyan : C.t1 }}>{dname}</div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+            <button style={{...btnCyanSt, width:"auto", background:C.bd, color:C.t1}} onClick={() => setDeviceModalOpen(false)}>닫기</button>
           </div>
         </div>
       )}
