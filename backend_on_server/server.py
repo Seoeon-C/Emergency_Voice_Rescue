@@ -231,6 +231,16 @@ DASHBOARD_CLIENTS: set[WebSocket] = set()
 # 구역별 상태
 ZONE_STATES: dict[str, dict] = {}
 
+# 구역별 대시보드 클라이언트 (채널 분리)
+ZONE_CLIENTS: dict[str, set] = {}
+
+def _zone_clients_add(zone_id: str, ws) -> None:
+    ZONE_CLIENTS.setdefault(zone_id, set()).add(ws)
+
+def _zone_clients_remove(ws) -> None:
+    for s in ZONE_CLIENTS.values():
+        s.discard(ws)
+
 EMERGENCY_KEYWORDS = [
     "아파", "아파요", "아프다", "도와", "도와줘", "도와주세요",
     "살려", "살려줘", "살려주세요", "119", "구조", "구해주세요",
@@ -334,6 +344,56 @@ async def broadcast(payload: dict):
         DASHBOARD_CLIENTS.discard(c)
 
 
+async def broadcast_to_zone(zone_id: str, payload: dict):
+    """해당 구역을 보고 있는 클라이언트에게만 전송"""
+    targets = list(ZONE_CLIENTS.get(zone_id, set()))
+    unregistered = list(DASHBOARD_CLIENTS - set().union(*ZONE_CLIENTS.values()) if ZONE_CLIENTS else DASHBOARD_CLIENTS)
+    dead = []
+    for client in targets + unregistered:
+        try:
+            await client.send_json(payload)
+        except Exception:
+            dead.append(client)
+    for c in dead:
+        DASHBOARD_CLIENTS.discard(c)
+        _zone_clients_remove(c)
+
+
+async def broadcast_zone_alert(zone_id: str, payload: dict):
+    """다른 구역 보고 있는 클라이언트에게 알림 전송"""
+    tts_key = payload.get("tts_key", "NONE")
+    kind = (
+        "emergency" if tts_key in {"EMERGENCY_GUIDE", "EVACUATION_GUIDE"} else
+        "warn2"     if tts_key == "INTRUSION_WARN_2" else
+        "warn1"     if tts_key == "INTRUSION_WARN_1" else None
+    )
+    if not kind:
+        return  # 정상 상황은 알림 불필요
+    alert = {
+        "type":      "zone_alert",
+        "timestamp": payload.get("timestamp", ""),
+        "zone_id":   payload.get("zone_id", ""),
+        "zone_name": payload.get("zone_name", ""),
+        "coord":     payload.get("coord", ""),
+        "addr":      payload.get("addr", ""),
+        "kind":      kind,
+        "situation": payload.get("situation", 0),
+        "tts_key":   tts_key,
+        "message":   payload.get("tts_message", ""),
+    }
+    monitoring = ZONE_CLIENTS.get(zone_id, set())
+    dead = []
+    for client in list(DASHBOARD_CLIENTS):
+        if client in monitoring:
+            continue
+        try:
+            await client.send_json(alert)
+        except Exception:
+            dead.append(client)
+    for c in dead:
+        DASHBOARD_CLIENTS.discard(c)
+
+
 # ── /api/zone-alert ───────────────────────────────────────────────
 @app.post("/api/zone-alert")
 async def receive_zone_alert(payload: dict = Body(...), db: Session = Depends(get_db)):
@@ -409,6 +469,12 @@ async def dashboard_endpoint(websocket: WebSocket):
                 print(f"[DASHBOARD] 구역 {zone_id} 감지 {'일시정지' if paused_state else '재개'}")
                 await broadcast({"type": "pause_state", "paused": paused_state, "zone_id": zone_id})
 
+            elif msg_type == "zone_select":
+                new_zone_id = raw.get("zone_id") or "default"
+                _zone_clients_remove(websocket)
+                _zone_clients_add(new_zone_id, websocket)
+                print(f"[DASHBOARD] 클라이언트 구역 등록: {new_zone_id}")
+
             elif msg_type == "self_check":
                 await websocket.send_json({
                     "type": "self_check_result",
@@ -424,6 +490,7 @@ async def dashboard_endpoint(websocket: WebSocket):
         pass
     finally:
         DASHBOARD_CLIENTS.discard(websocket)
+        _zone_clients_remove(websocket)
         print("🔌 [Dashboard] 대시보드 연결 종료")
 
 
@@ -727,7 +794,9 @@ async def _process_audio(
         "addr":              zone_info.get("addr", ""),
     }
 
-    await broadcast(payload)
+    await broadcast_to_zone(zone_id, payload)
+    if decision.situation in {1, 2}:
+        await broadcast_zone_alert(zone_id, payload)
 
     print(
         f"📡 [{zone_name}] BEATs={sound_event.raw_label}/{sound_event.label}"

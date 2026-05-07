@@ -357,32 +357,10 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   /* 구역 */
   const [zones, setZones] = useState([])
   const [selectedZoneId, setSelectedZoneId] = useState(null)
-  const [selectedDeviceKey, setSelectedDeviceKey] = useState(null)
-  const [deviceModalOpen, setDeviceModalOpen] = useState(false)
-  const selectedDeviceKeyRef = useRef(null)
-  selectedDeviceKeyRef.current = selectedDeviceKey
 
   const _zoneKey = selectedZoneId || "default"
   const paused = !!pausedZones[_zoneKey]
-
-  const devicesForZone = Object.keys(logsByZone)
-    .filter(k => k === _zoneKey || k.startsWith(_zoneKey + "_"))
-  const activeDeviceKey = selectedDeviceKey && devicesForZone.includes(selectedDeviceKey)
-    ? selectedDeviceKey
-    : devicesForZone[0] || null
-  const activeDeviceName = activeDeviceKey
-    ? (activeDeviceKey.startsWith(_zoneKey + "_") ? activeDeviceKey.slice(_zoneKey.length + 1) : activeDeviceKey)
-    : "없음"
-
-  const logs = Object.entries(logsByZone)
-    .filter(([k]) => {
-      const target = selectedDeviceKey && devicesForZone.includes(selectedDeviceKey) ? selectedDeviceKey : null
-      if (target) return k === target
-      return k === _zoneKey || k.startsWith(_zoneKey + "_")
-    })
-    .flatMap(([, v]) => v)
-    .sort((a, b) => b.id - a.id)
-    .slice(0, 100)
+  const logs = logsByZone[_zoneKey] || []
 
   pausedRef.current = paused
 
@@ -423,7 +401,6 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
   const selectZone = (zone) => {
     setSelectedZoneId(zone.id)
-    setSelectedDeviceKey(null)
     onUpdateConfig({ ...configRef.current, zone: zone.name })
     setMapCoord(zone.coord || "37.5665° N, 126.9780° E")
     setMapAddr(zone.label || "")
@@ -700,12 +677,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
         const situation = Number(data.situation ?? 0)
 
-        const zonePrefix = (selectedZoneIdRef.current || '') + '_'
-        const isCurrentZone = data.zone_id === selectedZoneIdRef.current || data.zone_id?.startsWith(zonePrefix)
-        const isTargetDevice = selectedDeviceKeyRef.current
-          ? data.zone_id === selectedDeviceKeyRef.current
-          : isCurrentZone
-        if (isTargetDevice) {
+        if (true) {
           setStatus(situation)
           setBeatsTs(data.timestamp || nowStr())
           const fallbackBeats = {
@@ -758,37 +730,27 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           noticeType = 2
         }
 
+        // 서버 채널 분리로 받은 이벤트는 현재 구역 것 → zone_id 없이 addLog
         addLog(
           situation === 2 ? 2 : situation === 1 ? 1 : "n",
           eventTitle,
           data.stt_text?.trim()
             ? `음성 감지: "${data.stt_text.trim()}"`
-            : data.reason || "",
-          data.zone_id
+            : data.reason || ""
         )
 
         if (data.stt_text && data.stt_text.trim()) {
-          addLog("voice", "음성 인식 결과", `"${data.stt_text.trim()}"`, data.zone_id)
+          addLog("voice", "음성 인식 결과", `"${data.stt_text.trim()}"`)
         }
 
-        const currentMonitoringZoneId = selectedZoneIdRef.current
-        const incomingZoneId = data.zone_id || data.zoneId || null
-        const rawIncomingZoneName = data.zone_name || data.zoneName || ""
-        const matchedIncomingZone = zonesRef.current.find(z => z.id === incomingZoneId)
-        const incomingZoneName = matchedIncomingZone?.name || (!looksLikeDeviceName(rawIncomingZoneName) && rawIncomingZoneName) || "관리구역 미지정"
-
-        const isOtherZoneAlert =
-          Boolean(incomingZoneId) &&
-          incomingZoneId !== "default" &&
-          incomingZoneId !== currentMonitoringZoneId
-
-        if (noticeKind && isOtherZoneAlert) {
+        // 다른 구역 알림은 서버가 zone_alert 타입으로 별도 전송하므로 제거
+        if (false && noticeKind) {
           setNotifications(prev => [{
             id: Date.now() + Math.random(),
-            zoneId: incomingZoneId,
-            zoneName: incomingZoneName,
-            coord: matchedIncomingZone?.coord || data.coord || activeZoneCoord,
-            addr: matchedIncomingZone?.addr || data.addr || activeZoneAddr,
+            zoneId: data.zone_id,
+            zoneName: data.zone_name || "관리구역 미지정",
+            coord: data.coord || activeZoneCoord,
+            addr: data.addr || activeZoneAddr,
             kind: noticeKind,
             type: noticeType,
             title: noticeKind === "emergency" ? "응급상황" : "무단침입",
@@ -1214,7 +1176,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             <div style={{ display:"flex", flexDirection:"column" }}>
               {[
                 ["구역명", currentZoneName||"—", () => setZoneModal(true)],
-                ["감지 장치", activeDeviceName, () => setDeviceModalOpen(true)],
+                ["감지 장치", "마이크 #1", null],
                 ["모니터링 시작", startTime.current, null],
               ].map(([l, v, handler]) => (
                 <div
@@ -1523,35 +1485,6 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                 확인
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── 기기 선택 모달 ── */}
-      {deviceModalOpen && (
-        <div style={modalOverlay}>
-          <div style={{ background:C.card, padding:24, borderRadius:12, border:`1px solid ${C.bd2}`, width:340 }}>
-            <div style={{ fontSize:16, fontWeight:800, marginBottom:16 }}>감지 장치 선택</div>
-            <div style={{ maxHeight:220, overflowY:"auto", marginBottom:16, border:`1px solid ${C.bd}`, borderRadius:6, padding:8 }}>
-              {devicesForZone.length === 0 ? (
-                <div style={{ padding:"16px", textAlign:"center", color:C.t3, fontSize:11 }}>연결된 장치가 없습니다</div>
-              ) : (
-                devicesForZone.map(dk => {
-                  const dname = dk.startsWith(_zoneKey + "_") ? dk.slice(_zoneKey.length + 1) : dk
-                  const isActive = (selectedDeviceKey || devicesForZone[0]) === dk
-                  return (
-                    <div
-                      key={dk}
-                      style={{ padding:"10px 12px", borderRadius:6, marginBottom:4, cursor:"pointer", background: isActive ? "rgba(34,211,238,.12)" : "transparent", border:`1px solid ${isActive ? C.cyan : "transparent"}` }}
-                      onClick={() => { setSelectedDeviceKey(dk); setDeviceModalOpen(false) }}
-                    >
-                      <div style={{ fontSize:13, fontWeight:700, color: isActive ? C.cyan : C.t1 }}>{dname}</div>
-                    </div>
-                  )
-                })
-              )}
-            </div>
-            <button style={{...btnCyanSt, width:"auto", background:C.bd, color:C.t1}} onClick={() => setDeviceModalOpen(false)}>닫기</button>
           </div>
         </div>
       )}
