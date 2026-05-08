@@ -103,9 +103,10 @@
     const center = parsedZones.find(z => z.selected)?.latlon || parsedZones[0]?.latlon || [37.5665, 126.9780];
 
     const map = L.map("map", {
-      zoomControl: true,
+      zoomControl: false,
       attributionControl: true,
     }).setView(center, 15);
+    L.control.zoom({ position: 'topright' }).addTo(map);
 
     const base = "https://api.vworld.kr/req/wmts/1.0.0/" + VWORLD_KEY;
     L.tileLayer(base + "/midnight/{z}/{y}/{x}.png", {

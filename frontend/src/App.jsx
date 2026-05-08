@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react"
+import { Volume2, User, Megaphone, Play, Pause, FileText, Bell, Settings, MapPin, Map, Activity, ShieldCheck, AlertTriangle, ShieldAlert, Check, X, Search } from "lucide-react"
 import "./styles/dashboard.css"
 const VWORLD_KEY = import.meta.env.VITE_VWORLD_KEY
 console.log("VWORLD_KEY:", VWORLD_KEY)
@@ -19,9 +20,9 @@ const C = {
 }
 
 const STATUS_DATA = {
-  0:{ c:C.green, bg:C.greenSoft, bd:C.greenBorder, ico:"✓", tag:"현재 상태 · 정상",  name:"정상",    desc:"구역이 정상적으로 관리 중입니다" },
-  1:{ c:C.amber, bg:C.amberSoft, bd:C.amberBorder, ico:"!", tag:"현재 상태 · 경고",  name:"무단침입", desc:"비허가 인원 진입 감지 — 경고 방송 송출 중" },
-  2:{ c:C.red,   bg:C.redSoft,   bd:C.redBorder,   ico:"⚠", tag:"현재 상태 · 긴급", name:"위험 감지", desc:"위험 상황 감지 — 즉각 대응 필요" },
+  0:{ c:C.green, bg:C.greenSoft, bd:C.greenBorder, Ico:ShieldCheck,    tag:"현재 상태 · 정상",  name:"정상",    desc:"구역이 정상적으로 관리 중입니다" },
+  1:{ c:C.amber, bg:C.amberSoft, bd:C.amberBorder, Ico:AlertTriangle,  tag:"현재 상태 · 경고",  name:"무단침입", desc:"비허가 인원 진입 감지 — 경고 방송 송출 중" },
+  2:{ c:C.red,   bg:C.redSoft,   bd:C.redBorder,   Ico:ShieldAlert,    tag:"현재 상태 · 긴급", name:"위험 감지", desc:"위험 상황 감지 — 즉각 대응 필요" },
 }
 
 const LOG_COLORS = {
@@ -63,6 +64,7 @@ const DEFAULT_MSGS = {
 
 const genId = () => Math.random().toString(36).slice(2) + Date.now().toString(36)
 const fmt = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`
+const fmtUptime = s => { const h=Math.floor(s/3600); const m=Math.floor((s%3600)/60); const sec=s%60; return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}` }
 const nowStr = () => { const d=new Date(); return [d.getHours(),d.getMinutes(),d.getSeconds()].map(v=>String(v).padStart(2,"0")).join(":") }
 const fs = size => `var(--sg-fs-${size})`
 const normalizeServerBase = (value, fallbackProtocol="http") => {
@@ -94,15 +96,10 @@ const getInitialTheme = () => {
   return window.localStorage.getItem(THEME_STORAGE_KEY) || "dark"
 }
 
-/* ─── 공통 스타일은 styles/dashboard.css에서 관리 ───────────── */
+/* ─── 공통 스타일은 styles/dashboard_2.css에서 관리 ──────────── */
 /* ════════════════════════════════════════════════════════════
    메인 컴포넌트
 ════════════════════════════════════════════════════════════ */
-const THEME_STORAGE_KEY = "soundguard-theme"
-const getInitialTheme = () => {
-  if (typeof window === "undefined") return "dark"
-  return window.localStorage.getItem(THEME_STORAGE_KEY) || "dark"
-}
 
 export default function SoundGuardDashboard() {
   const [screen, setScreen] = useState("login")  // "login" | "config" | "main"
@@ -128,16 +125,6 @@ export default function SoundGuardDashboard() {
     if (cfg) setConfig(cfg)
     setScreen(scr)
   }, [])
-
-  const toggleTheme = useCallback(() => {
-    setTheme(prev => prev === "light" ? "dark" : "light")
-  }, [])
-
-  useEffect(() => {
-    document.body.classList.toggle("sg-theme-light", theme === "light")
-    document.body.classList.toggle("sg-theme-dark", theme !== "light")
-    window.localStorage.setItem(THEME_STORAGE_KEY, theme)
-  }, [theme])
 
   return (
     <div style={{ minHeight:"100vh", background:C.bg, color:C.t1, fontFamily:C.sans, fontSize:fs(13) }}>
@@ -172,7 +159,7 @@ function LoginScreen({ onLogin }) {
       <div style={{ width:"100%", maxWidth:390 }}>
         {/* 브랜드 */}
         <div style={{ textAlign:"center", marginBottom:28 }}>
-          <div style={{ width:70, height:70, borderRadius:C.rXl, background:C.cyanSoft, border:`1px solid ${C.cyanBorder}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:fs(30), margin:"0 auto 16px" }}>🔊</div>
+          <div style={{ width:70, height:70, borderRadius:C.rXl, background:C.cyanSoft, border:`1px solid ${C.cyanBorder}`, display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 16px" }}><Volume2 size={32} color="var(--sg-cyan)" /></div>
           <div style={{ fontSize:fs(9), letterSpacing:".2em", textTransform:"uppercase", color:C.t3, marginBottom:7 }}>Sound Guard System</div>
           <div style={{ fontSize:fs(20), fontWeight:800, letterSpacing:"-.02em" }}>음향 기반 위험 예방·구조 시스템</div>
           <div style={{ fontSize:fs(11), color:C.t2, marginTop:5 }}>상황실 관리자 전용</div>
@@ -238,7 +225,7 @@ function ConfigScreen({ adminId, initConfig, onSave, onBack }) {
     <div style={{ display:"flex", flexDirection:"column", minHeight:"100vh" }}>
       {/* 헤더 */}
       <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 22px", borderBottom:`1px solid ${C.bd}`, background:C.sf, position:"sticky", top:0, zIndex:20 }}>
-        <div style={{ fontSize:fs(14), fontWeight:800 }}>🔊 SoundGuard</div>
+        <div style={{ fontSize:fs(14), fontWeight:800 }}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Volume2 size={16} color="var(--sg-cyan)" />SoundGuard</span></div>
         <div style={{ fontSize:fs(10), color:C.t3, padding:"2px 8px", background:C.panel2, borderRadius:C.rSm }}>안내 멘트 설정</div>
         <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:8 }}>
           <span style={{ fontSize:fs(10), color:C.t2, padding:"2px 8px", border:`1px solid ${C.bd}`, borderRadius:C.rPill }}>{adminId}</span>
@@ -380,11 +367,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   })
   const [logsByZone, setLogsByZone] = useState({})
   const [clock,    setClock]    = useState(nowStr())
-  const [decisionMeta, setDecisionMeta] = useState({
-    situationName:"대기", source:"대기", reason:"서버 분석 결과를 기다리는 중입니다",
-    action:"감시 대기", beatsLabel:"—", beatsRawLabel:"—",
-    sttText:"", ttsKey:"NONE", emergencyConfirmed:false, timestamp:"대기",
-  })
+  const [systemUptime, setSystemUptime] = useState(0)
   const [sidebarExpanded, setSidebarExpanded] = useState({ status:false, health:false, zone:false, detection:false, logs:false })
   const toggleSidebarSection = useCallback((key) => setSidebarExpanded(prev => ({...prev, [key]:!prev[key]})), [])
   const wsRef = useRef(null)
@@ -409,17 +392,6 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const [notifications, setNotifications] = useState([])
   const [selfCheckRunning, setSelfCheckRunning] = useState(false)
   const [selfCheckResult, setSelfCheckResult] = useState(null)
-  const [sidebarExpanded, setSidebarExpanded] = useState({
-    status: false,
-    health: false,
-    zone: false,
-    detection: false,
-    logs: false,
-  })
-
-  const toggleSidebarSection = useCallback((key) => {
-    setSidebarExpanded(prev => ({ ...prev, [key]: !prev[key] }))
-  }, [])
 
   useEffect(() => {
     if (status !== 0) {
@@ -612,13 +584,6 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     }
   }, [status])
 
-  useEffect(() => {
-    if (status !== 0) {
-      setCctvLatchedActive(true)
-      setCctvAlertStatus(status)
-    }
-  }, [status])
-
   /* 새 창이 닫혔는지 0.5초마다 확인 */
   useEffect(() => {
     if (!cctvPopupOpen) return
@@ -634,6 +599,12 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   /* 시계 */
   useEffect(() => {
     const iv = setInterval(() => setClock(nowStr()), 1000)
+    return () => clearInterval(iv)
+  }, [])
+
+  /* 시스템 가동 시간 */
+  useEffect(() => {
+    const iv = setInterval(() => setSystemUptime(p => p + 1), 1000)
     return () => clearInterval(iv)
   }, [])
 
@@ -1304,11 +1275,11 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   
 
   const mapPanelSt = {
-    ...cardSt, flex:1, display:"grid",
-    gridTemplateColumns:"1fr",
-    position:"relative", background:"#0a1424", minHeight:0,
+    flex:1, display:"flex", flexDirection:"column",
+    border:`1px solid ${C.bd}`, borderRadius:C.rLg,
+    position:"relative", background:"#0a1424", minHeight:0, overflow:"hidden",
   }
-  const mapAreaSt = { position:"relative", minWidth:0, minHeight:0, overflow:"hidden" }
+  const mapAreaSt = { position:"relative", flex:1, minWidth:0, minHeight:0, overflow:"hidden" }
   const resizeHandleSt = {
     position:"relative", zIndex:4, cursor:"col-resize",
     background:`linear-gradient(90deg, ${C.bd}, ${C.cyanSoft}, ${C.bd})`,
@@ -1341,50 +1312,94 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const sttDisplay = decisionMeta.sttText?.trim() || "없음"
   const responseStateText = curMsg ? curMsg.type : status === 2 ? "위험 상황 확인 중" : status === 1 ? "경고 조건 확인 중" : "송출 대기"
 
+  const mBtnSt = { border:`1px solid ${C.bd}`, borderRadius:C.rSm, padding:"4px 9px", background:"none", color:C.t2, cursor:"pointer", fontFamily:"inherit", fontSize:fs(10), whiteSpace:"nowrap" }
+
+  const sidebarStatusMetrics = [
+    ["판단 근거", decisionMeta.source || "대기", C.t2],
+    ["대응 방침", decisionMeta.action || "감시 대기", sd.c],
+    ["감지음", lastSnd, C.t2],
+    ["타임스탬프", decisionMeta.timestamp || "대기", C.t3],
+  ]
+
+  const visibleHealthItems = [
+    ["마이크", "연결됨", C.green],
+    ["BEATs", beatsTs !== "대기" ? "활성" : "대기중", beatsTs !== "대기" ? C.green : C.amber],
+    ["TTS", "준비됨", C.green],
+    ["서버", status === 0 && beatsTs === "대기" ? "대기중" : "연결됨", status === 0 && beatsTs === "대기" ? C.amber : C.green],
+  ]
+
+  const visibleZoneInfoRows = [
+    ["구역", currentZoneName, () => setZoneModal(true)],
+    ["감지 장치", "마이크 #1", null],
+    ["모니터링 시작", startTime.current, null],
+  ]
+
+  const visibleLogs = sidebarExpanded.logs ? logs : logs.slice(0, 8)
+
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100vh", overflow:"hidden", position:"relative" }}>
 
       {/* ── 헤더 ── */}
       <div className="sg-dashboard-header">
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-          <div style={{ fontSize:fs(14), fontWeight:800, whiteSpace:"nowrap" }}>🔊 SoundGuard</div>
-          <div style={{ fontSize:fs(10), color:C.t2, padding:"3px 10px", background:C.panel2, border:`1px solid ${C.bd}`, borderRadius:C.rPill, maxWidth:200, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-            {config.zone || "관리구역 미지정"}
+          <div style={{ fontSize:fs(14), fontWeight:800, whiteSpace:"nowrap" }}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Volume2 size={16} color="var(--sg-cyan)" />SoundGuard</span></div>
+          <div className="sg-chip"><span style={{display:"inline-flex",alignItems:"center",gap:4}}><User size={11} />{adminId}</span></div>
+          <div style={{ display:"flex", alignItems:"center", gap:6, padding:"3px 10px", background:C.panel2, border:`1px solid ${C.bd}`, borderRadius:C.rPill }}>
+            <span style={{ display:"inline-block", width:5, height:5, borderRadius:"50%", background:paused?C.amber:C.green, flexShrink:0 }} />
+            <span style={{ fontSize:fs(10), color:C.t3 }}>{paused?"감지 일시정지":"시스템 활성"}</span>
+            <span style={{ fontSize:fs(10), fontFamily:C.mono, color:C.t2 }}>{fmtUptime(systemUptime)}</span>
           </div>
-          <div className="sg-chip">👤 {adminId}</div>
+        </div>
+
+        {/* 중앙 현재 송출 메시지 */}
+        <div style={{ position:"absolute", left:"50%", top:"50%", transform:"translate(-50%,-50%)", display:"flex", alignItems:"center", gap:8, background:curMsg ? C.panel2 : "transparent", border:`1px solid ${curMsg ? C.cyanBorder : C.bd}`, borderRadius:C.rPill, padding:"5px 18px", maxWidth:420, overflow:"hidden", pointerEvents:"none", zIndex:2, transition:"border-color 0.3s, background 0.3s" }}>
+          <span style={{ width:6, height:6, borderRadius:"50%", background:curMsg ? C.cyan : C.t3, flexShrink:0, boxShadow: curMsg ? `0 0 8px ${C.cyan}` : "none", transition:"background 0.3s" }} />
+          {curMsg ? (
+            <>
+              <span style={{ display:"inline-flex", alignItems:"center", gap:4, fontSize:fs(9), fontWeight:900, color:C.cyan, whiteSpace:"nowrap", flexShrink:0 }}><Megaphone size={11} />송출 중</span>
+              <span style={{ fontSize:fs(10), color:C.t1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{curMsg.text}</span>
+            </>
+          ) : (
+            <span style={{ fontSize:fs(9), color:C.t3, whiteSpace:"nowrap" }}>송출 대기</span>
+          )}
         </div>
 
         <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:5, flexWrap:"wrap" }}>
           <button className="sg-mini-button" onClick={togglePause} style={{ color:paused?C.green:C.amber, borderColor:paused?C.greenBorder:C.amberBorder, background:paused?C.greenSoft:C.amberSoft }}>
-            {paused ? "▶ 감지 재개" : "⏸ 감지 일시정지"}
+            <span style={{display:"inline-flex",alignItems:"center",gap:4}}>{paused ? <><Play size={11} />감지 재개</> : <><Pause size={11} />감지 일시정지</>}</span>
           </button>
           <button className="sg-mini-button" onClick={() => setMentPopup(true)} style={{ color:C.t1, background:C.panel2 }}>
-            📝 안내멘트 설정
+            <span style={{display:"inline-flex",alignItems:"center",gap:4}}><FileText size={11} />안내멘트 설정</span>
           </button>
           <button
             onClick={() => setNotifPanelOpen(p => !p)}
             className="sg-mini-button"
             style={{ position:"relative", color: unreadCount > 0 ? C.cyan : C.t2, borderColor: unreadCount > 0 ? C.cyanBorder : C.bd, background: unreadCount > 0 ? C.cyanSoft : "none" }}
           >
-            🔔 알림
+            <span style={{display:"inline-flex",alignItems:"center",gap:4}}><Bell size={11} />알림</span>
             {unreadCount > 0 && (
               <span style={{ marginLeft:5, background:C.red, color:"#fff", borderRadius:C.rPill, fontSize:fs(9), fontWeight:800, padding:"1px 5px", lineHeight:"15px", display:"inline-block", verticalAlign:"middle" }}>
                 {unreadCount}
               </span>
             )}
           </button>
-          <button style={{ ...mBtnSt }} onClick={() => setSettingsModal(true)}>⚙ 설정</button>
-          <button style={{ ...mBtnSt, minWidth:82 }} onClick={onToggleTheme} title="화면 테마 전환">
-            {theme === "light" ? "🌙 다크 모드" : "☀ 라이트 모드"}
-          </button>
+          <button style={{ ...mBtnSt }} onClick={() => setSettingsModal(true)}><span style={{display:"inline-flex",alignItems:"center",gap:4}}><Settings size={11} />설정</span></button>
         </div>
       </div>
 
       {/* ── 바디 ── */}
-      <div style={{ display:"grid", gridTemplateColumns:"300px 1fr", flex:1, overflow:"hidden", minHeight:0 }}>
+      <div ref={mapPanelRef} style={{ position:"relative", flex:1, overflow:"hidden", minHeight:0 }}>
 
-        {/* 좌측 패널 */}
-        <div className="sg-sidebar" style={{ overflowY:"auto", padding:12, display:"flex", flexDirection:"column", gap:10, borderRight:`1px solid ${C.bd}` }}>
+        {/* 지도 배경 - 전체화면 */}
+        <iframe
+          key={mapSrc}
+          title="SoundGuard Map"
+          src={mapSrc}
+          style={{ position:"absolute", inset:0, width:"100%", height:"100%", border:"none", display:"block" }}
+        />
+
+        {/* 좌측 플로팅 패널 */}
+        <div className="sg-left-float">
 
           <div className="sg-sidebar-node">
             <div>
@@ -1406,7 +1421,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           {/* 상태 배너 */}
           <div className="sg-sidebar-status" style={{ borderColor:sd.bd, background:sd.bg, color:sd.c }}>
             <div className="sg-sidebar-status-top">
-              <div style={{ width:38, height:38, borderRadius:C.rMd, background:C.panel3, display:"flex", alignItems:"center", justifyContent:"center", fontSize:fs(20), color:sd.c, flexShrink:0 }}>{sd.ico}</div>
+              <div style={{ width:38, height:38, borderRadius:C.rMd, background:C.panel3, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><sd.Ico size={22} color={sd.c} /></div>
               <div className="sg-sidebar-status-copy">
                 <div style={{ fontSize:fs(8), textTransform:"uppercase", letterSpacing:".15em", fontWeight:700, color:sd.c, marginBottom:3 }}>{sd.tag}</div>
                 <div style={{ fontSize:fs(18), fontWeight:800, letterSpacing:"-.02em", color:sd.c }}>{sd.name}</div>
@@ -1443,13 +1458,6 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           <div className="sg-card sg-sidebar-card" style={{ flexShrink:0 }}>
             <div className="sg-panel-head">
               <span className="sg-panel-title">SYSTEM HEALTH</span>
-              <button
-                className="sg-sidebar-toggle"
-                onClick={() => toggleSidebarSection("health")}
-                aria-expanded={sidebarExpanded.health}
-              >
-                {sidebarExpanded.health ? "간단히" : "자세히"}
-              </button>
             </div>
             <div className="sg-health-grid">
               {visibleHealthItems.map(([label, value, color]) => (
@@ -1465,14 +1473,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           {/* 구역 정보 */}
           <div className="sg-card sg-sidebar-card" style={{ flexShrink:0 }}>
             <div className="sg-panel-head">
-              <span className="sg-panel-title">📍 구역 정보</span>
-              <button
-                className="sg-sidebar-toggle"
-                onClick={() => toggleSidebarSection("zone")}
-                aria-expanded={sidebarExpanded.zone}
-              >
-                {sidebarExpanded.zone ? "간단히" : "자세히"}
-              </button>
+              <span className="sg-panel-title" style={{display:"inline-flex",alignItems:"center",gap:5}}><MapPin size={13} />구역 정보</span>
             </div>
             <div style={{ display:"flex", flexDirection:"column" }}>
               {visibleZoneInfoRows.map(([l, v, handler]) => (
@@ -1493,7 +1494,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           {/* 감지된 인물 */}
           <div className="sg-card sg-sidebar-card" style={{ flexShrink:0 }}>
             <div className="sg-panel-head">
-              <span className="sg-panel-title">👤 감지된 인물</span>
+              <span className="sg-panel-title" style={{display:"inline-flex",alignItems:"center",gap:5}}><User size={13} />감지된 인물</span>
               <div className="sg-panel-actions">
                 <span style={{ fontSize:fs(8), padding:"2px 6px", border:`1px solid ${detected?C.amberBorder:C.bd}`, borderRadius:C.rXs, fontWeight:700, background:detected?C.amberSoft:C.panel2, color:detected?C.amber:C.t3 }}>{detected?"감지 중":"미감지"}</span>
                 <button
@@ -1562,49 +1563,74 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           </div>
         </div>
 
-        {/* 중앙 패널 */}
-        <div style={{ display:"flex", flexDirection:"column", padding:12, gap:10, overflow:"hidden" }}>
+        {/* 지도 레이블 오버레이 */}
+        <div style={{ position:"absolute", top:12, left:296, background:C.overlay, padding:"5px 10px", borderRadius:C.rMd, border:`1px solid ${C.bd}`, fontSize:fs(11), fontWeight:700, color:C.t1, zIndex:12, pointerEvents:"none", display:"flex", alignItems:"center", gap:6 }}>
+          <Map size={13} color="var(--sg-cyan)" />현재 음성감지구역 지도
+        </div>
+        <div
+          style={{ position:"absolute", top:44, left:296, background:C.overlay, padding:"5px 9px", borderRadius:C.rMd, border:`1px solid ${C.bd}`, fontSize:fs(10), color:C.t2, cursor:"pointer", transition:"border-color 0.2s", zIndex:12, maxWidth:"calc(50% - 300px)" }}
+          onMouseOver={e => e.currentTarget.style.borderColor = C.cyan}
+          onMouseOut={e => e.currentTarget.style.borderColor = C.bd}
+          onClick={() => setMapInfoModal(true)}
+        >
+          <span style={{color:C.t1, fontWeight:700, marginRight:5}}>좌표</span>{mapCoord}<br/>
+          <span style={{color:C.t1, fontWeight:700, marginRight:5}}>라벨</span>{mapAddr}
+        </div>
 
-          {/* 지도 + CCTV 분할 시각화 */}
-          <div ref={mapPanelRef} className="sg-card" style={mapPanelSt}>
-
-            {/* 지도 영역 */}
-            <div style={mapAreaSt}>
-              <div style={{ position:"absolute", top:12, left:12, background:C.overlay, padding:"5px 10px", borderRadius:C.rMd, border:`1px solid ${C.bd}`, fontSize:fs(11), fontWeight:700, color:C.t1, zIndex:2 }}>
-                🗺 현재 음성감지구역 지도
-              </div>
-              <iframe
-                key={mapSrc}
-                title="SoundGuard Map"
-                src={mapSrc}
-                style={{ width:"100%", height:"100%", border:"none", display:"block" }}
-              />
-              <div
-                style={{ position:"absolute", bottom:12, left:12, background:C.overlay, padding:"6px 10px", borderRadius:C.rMd, border:`1px solid ${C.bd}`, fontSize:fs(10), color:C.t2, cursor:"pointer", transition:"border-color 0.2s", zIndex:2, maxWidth:"calc(100% - 24px)" }}
-                onMouseOver={e => e.currentTarget.style.borderColor = C.cyan}
-                onMouseOut={e => e.currentTarget.style.borderColor = C.bd}
-                onClick={() => setMapInfoModal(true)}
-              >
-                <span style={{color:C.t1, fontWeight:700, marginRight:6}}>좌표</span> {mapCoord}<br/>
-                <span style={{color:C.t1, fontWeight:700, marginRight:6}}>라벨</span> {mapAddr}
-              </div>
+        {/* 지도 범례 */}
+        <div style={{ position:"absolute", top:102, left:296, background:C.overlay, padding:"5px 12px", borderRadius:C.rPill, border:`1px solid ${C.bd}`, zIndex:12, pointerEvents:"none", display:"flex", alignItems:"center", gap:12 }}>
+          {[[C.green, C.greenBorder, "정상"], [C.amber, C.amberBorder, "경고"], [C.red, C.redBorder, "응급"]].map(([color, border, label]) => (
+            <div key={label} style={{ display:"flex", alignItems:"center", gap:5 }}>
+              <span style={{ width:8, height:8, borderRadius:"50%", background:color, boxShadow:`0 0 6px ${color}`, flexShrink:0 }} />
+              <span style={{ fontSize:fs(9), fontWeight:700, color:C.t2 }}>{label}</span>
             </div>
+          ))}
+        </div>
 
-            {/* 리사이즈 핸들 */}
-            {/* CCTV 하단으로 이동 - 지도 옆 CCTV 비활성화 */}
-            {false && cctvVisible && (<div style={resizeHandleSt}><div style={resizeGripSt} /></div>)}
-            {false && cctvVisible && (<div style={cctvAreaSt} />)}
-          </div>
+            {/* 플로팅 팝업 오버레이 - 지도 위에 절대 배치 */}
+            <div className="sg-float-overlay">
 
-          {/* 하단 3패널: 음향분석 | 판단결과+메시지 | CCTV */}
-          <div style={bottomLayoutSt}>
-            <div style={bottomLeftLayoutSt}>
+              {/* CCTV 플로팅 카드 - 좌측에서 슬라이드인 */}
+              {cctvVisible && (
+                <div className="sg-float-popup sg-float-popup--cctv">
+                  <video src={cctvVideoSrc} autoPlay muted loop playsInline style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }} />
+                  <div style={{ position:"absolute", top:8, left:8, display:"flex", alignItems:"center", gap:5, background:"rgba(2,7,17,.82)", border:`1px solid ${cctvStatus===2?"rgba(248,113,113,.5)":"rgba(251,191,36,.45)"}`, borderRadius:5, padding:"4px 8px", fontSize:10, fontWeight:800, color:cctvStatus===2?C.red:C.amber }}>
+                    <span style={{ width:6, height:6, borderRadius:"50%", background:cctvStatus===2?C.red:C.amber, boxShadow:`0 0 8px ${cctvStatus===2?C.red:C.amber}` }} />CCTV
+                  </div>
+                  <button type="button" onClick={openCctvPopup} style={{ position:"absolute", top:8, right:50, background:"rgba(2,7,17,.86)", border:`1px solid ${C.bd}`, borderRadius:5, padding:"4px 7px", color:C.t1, cursor:"pointer", fontSize:9, fontWeight:800, fontFamily:"inherit" }}>팝업</button>
+                  <button type="button" onClick={closeCctvView} style={{ position:"absolute", top:8, right:8, background:"rgba(248,113,113,.12)", border:"1px solid rgba(248,113,113,.35)", borderRadius:5, padding:"4px 7px", color:C.red, cursor:"pointer", fontSize:9, fontWeight:900, fontFamily:"inherit" }}>닫기</button>
+                  <div style={{ position:"absolute", right:8, bottom:8, background:"rgba(2,7,17,.82)", border:`1px solid ${C.bd}`, borderRadius:5, padding:"3px 7px", fontSize:9, color:C.t2 }}>{cctvStatus===2?"위험 감지":"침입 감지"}</div>
+                </div>
+              )}
+
+              {/* 스페이서 - 패널들을 우측하단으로 밀기 */}
+              <div style={{ flex:1, minWidth:0 }} />
+
+              {/* 감지 판단 요약 */}
+              <div className="sg-float-popup sg-float-popup--decision">
+                <div className="sg-panel-head">
+                  <span className="sg-panel-title">감지 판단 요약</span>
+                  <span className="sg-status-pill" style={{ color:STATUS_DATA[status]?.c, borderColor:STATUS_DATA[status]?.bd, background:STATUS_DATA[status]?.bg }}>{decisionBadgeText}</span>
+                </div>
+                <div className="sg-decision-body">
+                  <div className="sg-decision-title" style={{ color:STATUS_DATA[status]?.c }}>{decisionMeta.situationName}</div>
+                  <div className="sg-decision-reason">{decisionMeta.reason || "현재 분석 근거가 아직 수신되지 않았습니다"}</div>
+                  <div className="sg-evidence-grid">
+                    {[["BEATs", decisionMeta.beatsRawLabel || decisionMeta.beatsLabel || "—"], ["STT", sttDisplay], ["대응", decisionMeta.action || "감시 지속"]].map(([label, value]) => (
+                      <div className="sg-evidence-item" key={label}><span>{label}</span><strong>{value}</strong></div>
+                    ))}
+                  </div>
+                </div>
+              </div>
 
               {/* 실시간 음향 분석 */}
-              <div className="sg-card sg-bottom-panel">
+              <div className="sg-float-popup sg-float-popup--sound">
                 <div className="sg-panel-head">
-                  <span className="sg-panel-title">⚡ 실시간 음향 분석</span>
-                  <span className="sg-bottom-head-value">{beatsTs}</span>
+                  <span className="sg-panel-title" style={{display:"inline-flex",alignItems:"center",gap:5}}><Activity size={13} />실시간 음향 분석</span>
+                  <div style={{ display:"flex", alignItems:"center", gap:5 }}>
+                    <span style={{ fontSize:fs(8), fontWeight:900, padding:"2px 6px", borderRadius:C.rPill, background:C.greenSoft, border:`1px solid ${C.greenBorder}`, color:C.green }}>LIVE</span>
+                    <span className="sg-bottom-head-value">{beatsTs}</span>
+                  </div>
                 </div>
                 <div className="sg-sound-summary">
                   <div>
@@ -1630,64 +1656,8 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                 </div>
               </div>
 
-              <div style={{ display:"flex", flexDirection:"column", gap:10, minWidth:0, minHeight:0 }}>
-                {/* 감지 판단 요약 */}
-                <div className="sg-card sg-bottom-panel sg-decision-panel">
-                  <div className="sg-panel-head">
-                    <span className="sg-panel-title">감지 판단 요약</span>
-                    <span className="sg-status-pill" style={{ color:STATUS_DATA[status]?.c, borderColor:STATUS_DATA[status]?.bd, background:STATUS_DATA[status]?.bg }}>{decisionBadgeText}</span>
-                  </div>
-                  <div className="sg-decision-body">
-                    <div className="sg-decision-title" style={{ color:STATUS_DATA[status]?.c }}>{decisionMeta.situationName}</div>
-                    <div className="sg-decision-reason">{decisionMeta.reason || "현재 분석 근거가 아직 수신되지 않았습니다"}</div>
-                    <div className="sg-evidence-grid">
-                      {[["BEATs", decisionMeta.beatsRawLabel || decisionMeta.beatsLabel || "—"], ["STT", sttDisplay], ["대응", decisionMeta.action || "감시 지속"]].map(([label, value]) => (
-                        <div className="sg-evidence-item" key={label}><span>{label}</span><strong>{value}</strong></div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
 
-                {/* 현재 대응 메시지 */}
-                <div className="sg-card sg-bottom-panel sg-response-panel">
-                  <div className="sg-panel-head">
-                    <span className="sg-panel-title">📢 현재 대응 메시지</span>
-                    <span className="sg-bottom-head-value">{decisionMeta.ttsKey || "NONE"}</span>
-                  </div>
-                  <div className="sg-response-body">
-                    <div className="sg-response-state" style={{ color:curMsg ? C.cyan : C.t2 }}>{responseStateText}</div>
-                    <div className={`sg-response-message${curMsg ? "" : " sg-response-message--empty"}`}>
-                      {curMsg ? curMsg.text : "현재 송출 중인 메시지 없음"}
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
-
-            {/* CCTV 하단 우측 */}
-            {cctvVisible && (
-              <div className="sg-card" style={cctvBottomAreaSt}>
-                <video src={cctvVideoSrc} autoPlay muted loop playsInline style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }} />
-                <div style={{ position:"absolute", top:12, left:12, display:"flex", alignItems:"center", gap:7, background:"rgba(2,7,17,.82)", border:`1px solid ${cctvStatus===2?"rgba(248,113,113,.5)":"rgba(251,191,36,.45)"}`, borderRadius:6, padding:"5px 9px", fontSize:11, fontWeight:800, color:cctvStatus===2?C.red:C.amber }}>
-                  <span style={{ width:7, height:7, borderRadius:"50%", background:cctvStatus===2?C.red:C.amber, boxShadow:`0 0 12px ${cctvStatus===2?C.red:C.amber}` }} />CCTV
-                </div>
-                <button type="button" onClick={openCctvPopup} style={{ position:"absolute", top:12, right:62, background:"rgba(2,7,17,.86)", border:`1px solid ${C.bd}`, borderRadius:6, padding:"5px 9px", color:C.t1, cursor:"pointer", fontSize:10, fontWeight:800, fontFamily:"inherit" }}>팝업으로 보기</button>
-                <button type="button" onClick={closeCctvView} style={{ position:"absolute", top:12, right:12, background:"rgba(248,113,113,.12)", border:"1px solid rgba(248,113,113,.35)", borderRadius:6, padding:"5px 9px", color:C.red, cursor:"pointer", fontSize:10, fontWeight:900, fontFamily:"inherit" }} title="CCTV 화면 닫기">닫기</button>
-                <div style={{ position:"absolute", right:12, bottom:12, background:"rgba(2,7,17,.82)", border:`1px solid ${C.bd}`, borderRadius:6, padding:"5px 9px", fontSize:10, color:C.t2 }}>{cctvStatus===2?"위험 감지 화면":"무단침입 감지 화면"}</div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ── 푸터 ── */}
-      <div style={{ borderTop:`1px solid ${C.bd}`, padding:"8px 14px", display:"flex", alignItems:"center", gap:7, flexShrink:0, background:C.sf }}>
-        <div style={{ display:"flex", alignItems:"center", gap:7, fontSize:fs(10) }}>
-          <span style={{ display:"inline-block", width:5, height:5, borderRadius:"50%", background:paused?C.amber:C.green }} />
-          <span style={{ color:C.t3 }}>{paused ? "감지 일시정지" : "시스템 활성"}</span>
-          <span style={{ color:C.t3 }}>|</span>
-          <span style={{ fontFamily:C.mono, fontSize:fs(11), color:C.t2 }}>{clock}</span>
-        </div>
       </div>
 
       {/* ── 모달 영역 ── */}
@@ -1827,7 +1797,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           <div style={{ position:"fixed", inset:0, zIndex:149 }} onClick={() => setNotifPanelOpen(false)} />
           <div style={{ position:"fixed", top:48, right:10, width:310, maxHeight:400, background:C.card, border:`1px solid ${C.bd2}`, borderRadius:C.rXl, zIndex:150, display:"flex", flexDirection:"column", boxShadow:C.shadowLg, overflow:"hidden" }}>
             <div style={{ padding:"9px 14px", borderBottom:`1px solid ${C.bd}`, display:"flex", justifyContent:"space-between", alignItems:"center", flexShrink:0 }}>
-              <span style={{ fontSize:fs(12), fontWeight:800, color:C.t1 }}>🔔 다른 구역 알림</span>
+              <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:fs(12), fontWeight:800, color:C.t1 }}><Bell size={14} />다른 구역 알림</span>
               <div style={{ display:"flex", gap:4 }}>
                 {unreadCount > 0 && (
                   <button className="sg-text-button" style={{ fontSize:fs(10) }} onClick={() => setNotifications(prev => prev.map(n => ({...n, read:true})))}>모두 읽음</button>
@@ -1875,7 +1845,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         <div className="sg-modal-overlay" onClick={e => e.target === e.currentTarget && setSettingsModal(false)}>
           <div style={{ background:C.card, borderRadius:C.rXl, border:`1px solid ${C.bd2}`, width:360, overflow:"hidden" }}>
             <div style={{ padding:"13px 18px", borderBottom:`1px solid ${C.bd}`, background:C.sf, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-              <span style={{ fontSize:fs(14), fontWeight:800 }}>⚙ 시스템 설정</span>
+              <span style={{ display:"inline-flex", alignItems:"center", gap:6, fontSize:fs(14), fontWeight:800 }}><Settings size={16} />시스템 설정</span>
               <button className="sg-text-button" onClick={() => setSettingsModal(false)}>✕</button>
             </div>
             <div style={{ padding:"18px" }}>
@@ -1889,14 +1859,14 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
               <div style={{ marginBottom:16 }}>
                 <div style={{ fontSize:fs(9), textTransform:"uppercase", letterSpacing:".12em", color:C.t3, fontWeight:700, marginBottom:8 }}>자가진단</div>
                 <button className="sg-button-primary" style={{ opacity:selfCheckRunning ? 0.65 : 1 }} onClick={runSelfCheck} disabled={selfCheckRunning}>
-                  {selfCheckRunning ? "🔍 진단 중..." : "🔍 자가진단 실행"}
+                  <span style={{display:"inline-flex",alignItems:"center",gap:5}}><Search size={13} />{selfCheckRunning ? "진단 중..." : "자가진단 실행"}</span>
                 </button>
                 {selfCheckResult && (
                   <div style={{ marginTop:10, background:C.panel, borderRadius:C.rMd, border:`1px solid ${C.bd}`, overflow:"hidden" }}>
                     {selfCheckResult.map(item => (
                       <div key={item.label} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 12px", borderBottom:`1px solid ${C.bd}` }}>
                         <span style={{ fontSize:fs(11), color:C.t2 }}>{item.label}</span>
-                        <span style={{ fontSize:fs(11), fontWeight:800, color: item.ok ? C.green : C.red }}>{item.ok ? "✓ 정상" : "✗ 오류"}</span>
+                        <span style={{ display:"inline-flex", alignItems:"center", gap:4, fontSize:fs(11), fontWeight:800, color: item.ok ? C.green : C.red }}>{item.ok ? <><Check size={13} />정상</> : <><X size={13} />오류</>}</span>
                       </div>
                     ))}
                     <div style={{ padding:"7px 12px", fontSize:fs(10), color:C.green, fontWeight:700 }}>모든 항목 정상</div>
