@@ -657,7 +657,16 @@ async def _process_audio(
     now       = time.time()
 
     # bytes → numpy
-    audio = np.frombuffer(audio_bytes, dtype=np.float32)
+    # WAV 헤더 포함 여부 감지 (Flutter는 WAV 파일 전체 전송, sensor.py는 raw float32)
+    if audio_bytes[:4] == b"RIFF":
+        import io as _io
+        data, sample_rate = sf.read(_io.BytesIO(audio_bytes))
+        data = data.astype(np.float32)
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+        audio = data
+    else:
+        audio = np.frombuffer(audio_bytes, dtype=np.float32)
 
     # 임시 wav 저장 (STT용)
     sf.write(tmp_path, audio, sample_rate)
