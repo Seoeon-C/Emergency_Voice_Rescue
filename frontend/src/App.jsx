@@ -117,7 +117,13 @@ function LoginScreen({ onLogin }) {
       <div style={{ width:"100%", maxWidth:390 }}>
         {/* 브랜드 */}
         <div style={{ textAlign:"center", marginBottom:28 }}>
-          <div style={{ width:70, height:70, borderRadius:18, background:"rgba(34,211,238,.09)", border:"1px solid rgba(34,211,238,.22)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:30, margin:"0 auto 16px" }}>🔊</div>
+          <div style={{ width:90, height:90, display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 16px" }}>
+            <img
+              src="/SoundGuardLogo_0.png"
+              alt="SoundGuard Logo"
+              style={{ width:"100%", height:"100%", objectFit:"contain" }}
+            />
+          </div>
           <div style={{ fontSize:9, letterSpacing:".2em", textTransform:"uppercase", color:C.t3, marginBottom:7 }}>Sound Guard System</div>
           <div style={{ fontSize:20, fontWeight:800, letterSpacing:"-.02em" }}>음향 기반 위험 예방·구조 시스템</div>
           <div style={{ fontSize:11, color:C.t2, marginTop:5 }}>상황실 관리자 전용</div>
@@ -304,6 +310,7 @@ function MentEditOverlay({ config, onUpdateConfig, onClose, wsRef }) {
 ════════════════════════════════════════════════════════════ */
 function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateConfig }) {
   const [status,   setStatus]   = useState(0)
+  const [zoneStatusMap, setZoneStatusMap] = useState({})
   const [pausedZones, setPausedZones] = useState({})
   const [detected, setDetected] = useState(false)
   const [elapsed,  setElapsed]  = useState(0)
@@ -396,6 +403,13 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       onUpdateConfig({ ...configRef.current, zone: firstZone.name })
       setMapCoord(firstZone.coord || "37.5665° N, 126.9780° E")
       setMapAddr(firstZone.label || "")
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({
+          type: "zone_select",
+          zone_id: firstZone.id,
+          zone_name: firstZone.name,
+        }))
+      }
     }
   }, [selectedZoneId, zones])
 
@@ -667,6 +681,14 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           addLog("sys", data.paused ? "감지 일시정지 적용" : "감지 재개 적용", "백엔드 반영 완료")
           return
         }
+        if (data.type === "zones_updated") {
+          fetch(`${API_BASE}/api/zones`)
+            .then(r => r.json())
+            .then(updated => setZones(updated))
+            .catch(() => {})
+          return
+        }
+
         if (data.type === "self_check_result") {
           setSelfCheckRunning(false)
           setSelfCheckResult(data.items || [])
@@ -676,6 +698,12 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         if (data.type && data.type !== "analysis") return
 
         const situation = Number(data.situation ?? 0)
+
+        // 구역별 상태 지도 업데이트 (다중 포인트 지도용)
+        const incomingZoneId = data.zone_id || data.zoneId || selectedZoneIdRef.current
+        if (incomingZoneId) {
+          setZoneStatusMap(prev => ({ ...prev, [incomingZoneId]: situation }))
+        }
 
         if (true) {
           setStatus(situation)
@@ -1086,11 +1114,18 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const selectedZone = zones.find(z => z.id === selectedZoneId)
   const currentZoneName = selectedZone?.name || config.zone || "관리구역 미지정"
   const mapSrc =
-    `/map.html?lat=${encodeURIComponent(lat)}` +
-    `&lon=${encodeURIComponent(lon)}` +
-    `&name=${encodeURIComponent(currentZoneName)}` +
-    `&addr=${encodeURIComponent(mapAddr || "관할 구역 주소 미상")}` +
-    `&status=${status === 2 ? "danger" : status === 1 ? "warning" : "normal"}` +
+    `/map.html?zones=${encodeURIComponent(
+      JSON.stringify(
+        zones.map(z => ({
+          id: z.id,
+          name: z.name,
+          coord: z.coord,
+          addr: z.addr || z.label || "",
+          status: zoneStatusMap[z.id] ?? 0,
+          selected: z.id === selectedZoneId,
+        }))
+      )
+    )}` +
     `&key=${encodeURIComponent(VWORLD_KEY || "")}`
 
   const hdrSt = { display:"flex", alignItems:"center", gap:8, padding:"9px 16px", borderBottom:`1px solid ${C.bd}`, background:"rgba(7,14,28,.96)", flexShrink:0, flexWrap:"wrap", rowGap:6 }
@@ -1119,7 +1154,14 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       {/* ── 헤더 ── */}
       <div style={hdrSt}>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-          <div style={{ fontSize:14, fontWeight:800, whiteSpace:"nowrap" }}>🔊 SoundGuard</div>
+          <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:14, fontWeight:800, whiteSpace:"nowrap" }}>
+            <img
+              src="/SoundGuardLogo.png"
+              alt="SoundGuard Logo"
+              style={{ width:34, height:34, objectFit:"contain" }}
+            />
+            SoundGuard
+          </div>
           <div style={{ fontSize:10, color:C.t2, padding:"3px 10px", background:"rgba(255,255,255,.04)", border:`1px solid ${C.bd}`, borderRadius:20, maxWidth:200, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
             {config.zone || "관리구역 미지정"}
           </div>

@@ -1,0 +1,2 @@
+-keep class xyz.luan.audioplayers.** { *; }
+-keep class com.google.android.exoplayer2.** { *; }

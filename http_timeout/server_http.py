@@ -600,14 +600,7 @@ async def sensor_endpoint(websocket: WebSocket):
                 chunk = latest_chunk
                 latest_chunk = None
                 try:
-                    decision = await _process_audio(chunk, sample_rate, zone_info, zone_state, tmp_path)
-                    # TTS 결과를 센서 앱으로 전송
-                    if decision and decision.tts_key not in ("NONE", None, ""):
-                        tts_url = f"{SERVER_PUBLIC_URL}/tts/{decision.tts_key}.mp3"
-                        try:
-                            await websocket.send_json({"type": "tts", "announcement_url": tts_url})
-                        except Exception:
-                            pass
+                    await _process_audio(chunk, sample_rate, zone_info, zone_state, tmp_path)
                 except Exception as exc:
                     print(f"[Sensor] 처리 오류: {exc}")
             is_processing = False
