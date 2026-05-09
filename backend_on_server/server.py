@@ -388,7 +388,7 @@ async def broadcast_zone_alert(zone_id: str, payload: dict):
     """다른 구역 보고 있는 클라이언트에게 알림 전송"""
     tts_key = payload.get("tts_key", "NONE")
     kind = (
-        "emergency" if tts_key in {"EMERGENCY_GUIDE", "EVACUATION_GUIDE"} else
+        "emergency" if tts_key == "EMERGENCY_GUIDE" else
         "warn2"     if tts_key == "INTRUSION_WARN_2" else
         "warn1"     if tts_key == "INTRUSION_WARN_1" else None
     )
@@ -805,14 +805,18 @@ async def _process_audio(
                            send_to_control_room=True)
 
     # ── 침입 경고 상태 관리 ──
+    ai_situation = decision.situation  # AI 원본 결과 (잠금 해제 카운트용)
+
     if not in_emergency_lock:
         if zone_state.get("warn2_issued"):
-            # 2차 경고 진행 중 → 감지 여부 무관하게 30초마다 반복
+            # 2차 경고 잠금 중 → situation=1 강제 유지, tts_key만 조절
             if now - zone_state.get("warn2_time", 0.0) >= 30:
-                decision = replace(decision, tts_key="INTRUSION_WARN_2", action="2차 경고 반복")
+                decision = replace(decision, situation=1, situation_name="무단침입",
+                                   tts_key="INTRUSION_WARN_2", action="2차 경고 반복")
                 zone_state["warn2_time"] = now
             else:
-                decision = replace(decision, tts_key="NONE", action="감시 지속", send_to_control_room=False)
+                decision = replace(decision, situation=1, situation_name="무단침입",
+                                   tts_key="NONE", action="감시 지속", send_to_control_room=False)
         elif decision.situation == 1:
             if not zone_state.get("warn1_issued"):
                 # 1차 경고
@@ -825,13 +829,13 @@ async def _process_audio(
                 zone_state["warn2_issued"] = True
                 zone_state["warn2_time"] = now
 
-    # ── 정상상황 연속 카운트 (situation 기준) → 6회면 전체 리셋 ──
+    # ── 정상상황 연속 카운트 (AI 원본 기준) → 6회면 전체 리셋 ──
     if decision.situation == 2:
         # 응급 전환 시 침입 경고 상태 초기화
         zone_state.update({"warn1_issued": False, "warn2_issued": False,
                            "warn2_time": 0.0, "silence_cycles": 0})
 
-    if decision.situation == 0:
+    if ai_situation == 0:
         zone_state["silence_cycles"] = zone_state.get("silence_cycles", 0) + 1
         if zone_state["silence_cycles"] >= 6:
             zone_state.update({"warn1_issued": False, "warn2_issued": False,
@@ -915,8 +919,11 @@ async def _process_audio(
     print(
         f"📡 [{zone_name}] BEATs={sound_event.raw_label}/{sound_event.label}"
         f"({sound_event.confidence:.2f}) | Final={decision.situation_name}"
-        f" | TTS={decision.tts_key} | STT={stt_text or '없음'}"
+        f" | TTS={decision.tts_key}"
     )
+    if stt_text:
+        print(f"🎤 [{zone_name}] STT='{stt_text}'")
+    print("─" * 60)
 
     return decision
 

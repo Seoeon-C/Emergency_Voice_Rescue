@@ -53,7 +53,7 @@ TOOLS = [
                     },
                     "tts_key": {
                         "type": "string",
-                        "enum": ["NONE", "INTRUSION_WARN_1", "INTRUSION_WARN_2", "EMERGENCY_GUIDE", "EVACUATION_GUIDE"],
+                        "enum": ["NONE", "INTRUSION_WARN_1", "INTRUSION_WARN_2", "EMERGENCY_GUIDE"],
                     },
                     "send_to_control_room": {"type": "boolean"},
                     "emergency_candidate": {"type": "boolean"},
@@ -226,7 +226,7 @@ def decide(payload: dict) -> DecisionResult:
             final, source = rule, "rule (gpt fallback)"
 
     # situation=2인데 tts_key가 없거나 침입 경고 키면 EMERGENCY_GUIDE로 보정
-    if int(final.get("situation", 0)) == 2 and str(final.get("tts_key", "")) not in {"EMERGENCY_GUIDE", "EVACUATION_GUIDE"}:
+    if int(final.get("situation", 0)) == 2 and str(final.get("tts_key", "")) != "EMERGENCY_GUIDE":
         final = {**final, "tts_key": "EMERGENCY_GUIDE", "send_to_control_room": True, "emergency_candidate": True}
         source += " (emergency tts fix)"
 

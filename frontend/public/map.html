@@ -169,13 +169,15 @@
       if (event.data?.type === "zone_status") updateZoneStatuses(event.data.statuses);
     });
 
-    if (bounds.length >= 2) {
+    const selectedZone = parsedZones.find(z => z.selected);
+    if (selectedZone) {
+      map.setView(selectedZone.latlon, 16);
+    } else if (bounds.length >= 2) {
       map.fitBounds(bounds, { padding: [45, 45], maxZoom: 15 });
     } else if (bounds.length === 1) {
       map.setView(bounds[0], 16);
     }
 
-    const selectedZone = parsedZones.find(z => z.selected);
     if (selectedZone) {
       map.eachLayer(layer => {
         if (layer instanceof L.Marker) {
