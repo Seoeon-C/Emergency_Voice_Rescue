@@ -365,7 +365,9 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     emergencyConfirmed: false,
     timestamp: "대기",
   })
-  const [logsByZone, setLogsByZone] = useState({})
+  const [logsByZone, setLogsByZone] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("sg-logs") || "{}") } catch { return {} }
+  })
   const [clock,    setClock]    = useState(nowStr())
   const [systemUptime, setSystemUptime] = useState(0)
   const [sidebarExpanded, setSidebarExpanded] = useState({ status:false, health:false, zone:false, detection:false, logs:false })
@@ -578,13 +580,11 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     }
   }
 
-  /* status 변경 시 CCTV 활성화 상태 저장 */
+  /* 구역 전환 시 CCTV 초기화 */
   useEffect(() => {
-    if (status !== 0) {
-      setCctvLatchedActive(true)
-      setCctvAlertStatus(status)
-    }
-  }, [status])
+    setCctvLatchedActive(false)
+    setCctvPopupOpen(false)
+  }, [selectedZoneId])
 
   /* 새 창이 닫혔는지 0.5초마다 확인 */
   useEffect(() => {
@@ -628,10 +628,14 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const addLog = useCallback((type, title, detail, zoneId) => {
     const t = nowStr()
     const zId = zoneId || selectedZoneIdRef.current || "default"
-    setLogsByZone(prev => ({
-      ...prev,
-      [zId]: [{ id:Date.now()+Math.random(), t, type, title, detail }, ...(prev[zId] || [])].slice(0, 100)
-    }))
+    setLogsByZone(prev => {
+      const next = {
+        ...prev,
+        [zId]: [{ id:Date.now()+Math.random(), t, type, title, detail }, ...(prev[zId] || [])].slice(0, 100)
+      }
+      try { localStorage.setItem("sg-logs", JSON.stringify(next)) } catch {}
+      return next
+    })
   }, [])
 
   const sendTtsConfig = useCallback(() => {
@@ -1554,7 +1558,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             <div className="sg-panel-head">
               <span className="sg-panel-title">이벤트 로그</span>
               <div className="sg-panel-actions">
-                <button className="sg-text-button" style={{ padding:"2px 6px", fontSize:fs(9) }} onClick={()=>setLogsByZone(prev=>({...prev,[_zoneKey]:[]}))}>초기화</button>
+                <button className="sg-text-button" style={{ padding:"2px 6px", fontSize:fs(9) }} onClick={()=>setLogsByZone(prev=>{const next={...prev,[_zoneKey]:[]};try{localStorage.setItem("sg-logs",JSON.stringify(next))}catch{};return next})}>초기화</button>
                 <button
                   className="sg-sidebar-toggle"
                   onClick={() => toggleSidebarSection("logs")}

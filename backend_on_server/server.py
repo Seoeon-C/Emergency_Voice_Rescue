@@ -394,11 +394,23 @@ async def broadcast_zone_alert(zone_id: str, payload: dict):
     )
     if not kind:
         return  # 정상 상황은 알림 불필요
+
+    # DB에서 현재 구역 이름 조회 (센서 .env 이름 대신 실제 등록된 이름 사용)
+    resolved_name = payload.get("zone_name", "")
+    try:
+        db = SessionLocal()
+        zone_row = db.query(Zone).filter(Zone.id == zone_id).first()
+        if zone_row:
+            resolved_name = zone_row.name
+        db.close()
+    except Exception:
+        pass
+
     alert = {
         "type":      "zone_alert",
         "timestamp": payload.get("timestamp", ""),
         "zone_id":   payload.get("zone_id", ""),
-        "zone_name": payload.get("zone_name", ""),
+        "zone_name": resolved_name,
         "coord":     payload.get("coord", ""),
         "addr":      payload.get("addr", ""),
         "kind":      kind,
